@@ -46,20 +46,24 @@ const server = createServer(async (req, res) => {
   console.log('\nAdd it to .env.local and to the Vercel project env vars.');
 });
 
-await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-const redirectUri = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+// Set once the server is listening on its random port (tsx runs this as CJS: no top-level await).
+let redirectUri = '';
 
-const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-authUrl.search = new URLSearchParams({
-  client_id: clientId,
-  redirect_uri: redirectUri,
-  response_type: 'code',
-  scope: 'https://www.googleapis.com/auth/gmail.readonly',
-  access_type: 'offline',
-  prompt: 'consent', // always issue a fresh refresh token
-  state,
-  code_challenge: challenge,
-  code_challenge_method: 'S256',
-}).toString();
+server.listen(0, '127.0.0.1', () => {
+  redirectUri = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
-console.log('Open this URL and approve access:\n\n' + authUrl.toString());
+  const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  authUrl.search = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: 'https://www.googleapis.com/auth/gmail.readonly',
+    access_type: 'offline',
+    prompt: 'consent', // always issue a fresh refresh token
+    state,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+  }).toString();
+
+  console.log('Open this URL and approve access:\n\n' + authUrl.toString());
+});
