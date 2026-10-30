@@ -3,6 +3,7 @@ import 'server-only';
 import { db } from '@/db';
 import { accountLabelRepo } from '@/features/accounts';
 import { budget, budgetRepo } from '@/features/budget';
+import { postMessage } from '@/features/notifications/discord';
 import { reviewMessages } from '@/features/notifications/review-messages';
 import { syncMailbox } from '@/features/sync/sync-mailbox';
 import { ledger } from '@/features/transactions';
@@ -26,6 +27,7 @@ export const handleMcpRequest = createMcpEndpoint({
     ledger,
     audit: createAuditLog(db),
     review: reviewMessages,
+    discord: { post: (channel, content) => postMessage(channel, content) },
     async reprocessFailed(userId) {
       const { fetched, parsed, ignored, failed } = await syncMailbox(userId, { retryFailed: true });
       return { fetched, parsed, ignored, failed };

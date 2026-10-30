@@ -242,7 +242,9 @@ Read: `get_budget_overview` (start here), `list_transactions`, `get_uncategorise
 over 25 similar rows needs `confirm: true`), `create_category`, `set_budget_item`,
 `set_salary_config`, `set_notification_settings`, `exclude_transaction` / `restore_transaction`
 (soft delete), `set_account_label` (names an account such as `CHEQ …1297`, or the counterparty
-behind description text; shown next to transactions, display only), `reprocess_failed_messages`. No hard deletes, no SQL, every query scoped to the signed-in user.
+behind description text; shown next to transactions, display only), `post_status_to_discord`
+(the digest-style budget status and/or a note from Claude, to #budget; at most 5 posts an hour),
+`reprocess_failed_messages`. No hard deletes, no SQL, every query scoped to the signed-in user.
 Every call is written to `mcp_audit_log` (kept 90 days) and limited to 60 a minute.
 
 ### Checks (Supabase SQL editor)

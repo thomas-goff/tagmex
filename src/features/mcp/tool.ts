@@ -5,6 +5,7 @@ import type { BudgetRepo } from '@/features/budget/repo';
 import { ConflictError } from '@/features/budget/repo';
 import type { BudgetService } from '@/features/budget/service';
 import { InvalidInputError } from '@/features/budget/service';
+import type { DiscordChannel } from '@/features/notifications/discord';
 import type { ReviewMessages } from '@/features/notifications/review';
 import type { CategoryCorrector } from '@/features/transactions/correct-category';
 import { NotFoundError } from '@/features/transactions/correct-category';
@@ -28,6 +29,8 @@ export interface AuditEntry {
 export interface AuditLog {
   record(entry: AuditEntry): Promise<void>;
   countSince(userId: string, since: Date): Promise<number>;
+  // Successful calls of one tool, for per-tool caps.
+  countOkSince(userId: string, tool: string, since: Date): Promise<number>;
 }
 
 export interface ToolDeps {
@@ -38,6 +41,8 @@ export interface ToolDeps {
   audit: AuditLog;
   // #needs-review messages to tick off when their transactions are sorted.
   review: Pick<ReviewMessages, 'resolve'>;
+  // Posts to a Discord channel's webhook; returns the message id.
+  discord: { post(channel: DiscordChannel, content: string): Promise<string> };
   // Re-parse failed bank emails (after a parser fix). Posts results to Discord like a normal sync.
   reprocessFailed(userId: string): Promise<{ fetched: number; parsed: number; ignored: number; failed: number }>;
 }
