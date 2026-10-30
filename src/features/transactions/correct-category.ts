@@ -31,19 +31,32 @@ interface Deps {
 
 export type CategoryCorrector = ReturnType<typeof createCategoryCorrector>;
 
-// The "categorise this" action. Phase 3's MCP tool calls this; until then a protected route does.
+// The "categorise this" action, called by the categorise_transaction MCP tool and the interim route.
 export function createCategoryCorrector({ stores, unitOfWork }: Deps) {
   return {
-    // Sets the category by hand, learns an exact rule for the description so future emails match,
-    // and applies that rule to past transactions that are still uncategorised.
+    // The other uncategorised transactions the learned rule would categorise.
+    async findSimilar(userId: string, transactionId: string) {
+      const tx = await stores.transactions.findById(userId, transactionId);
+      if (!tx) throw new NotFoundError(`transaction ${transactionId}`);
+      const rule = { matchType: 'exact' as const, pattern: tx.descriptionNormalised };
+      return (await stores.transactions.listUncategorised(userId))
+        .filter((t) => t.id !== tx.id && ruleMatches(rule, t.descriptionNormalised))
+        .map((t) => t.id);
+    },
+
+    // Sets the category by hand and learns an exact rule for the description so future emails
+    // match. With applyToSimilar (the default) the rule also categorises past transactions that are
+    // still uncategorised.
     async correct({
       userId,
       transactionId,
       categoryId,
+      applyToSimilar = true,
     }: {
       userId: string;
       transactionId: string;
       categoryId: string;
+      applyToSimilar?: boolean;
     }): Promise<Correction> {
       const tx = await stores.transactions.findById(userId, transactionId);
       if (!tx) throw new NotFoundError(`transaction ${transactionId}`);
@@ -58,7 +71,7 @@ export function createCategoryCorrector({ stores, unitOfWork }: Deps) {
           categoryId,
           origin: 'learned',
         });
-        const appliedTo = await applyRuleRetroactively(s.transactions, userId, rule);
+        const appliedTo = applyToSimilar ? await applyRuleRetroactively(s.transactions, userId, rule) : 0;
         return { transactionId: tx.id, category, ruleId: rule.id, appliedTo };
       });
     },

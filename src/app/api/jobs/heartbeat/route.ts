@@ -5,6 +5,6 @@ import { notify } from '@/features/notifications/discord';
 export async function POST(req: Request) {
   if (!hasCronSecret(req)) return unauthorised();
   const dbMs = await pingDb();
-  await notify(`alive · db ${dbMs}ms`);
+  await notify(`alive · db ${dbMs}ms`, 'system');
   return Response.json({ ok: true, dbMs });
 }

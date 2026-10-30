@@ -22,6 +22,7 @@ export interface RecordOutcome {
   // False when this email already had a row (a retry, or a backfill racing the sync).
   created: boolean;
   // Null = uncategorised.
+  categoryId: string | null;
   categoryName: string | null;
 }
 
@@ -120,7 +121,7 @@ export function createTransactionRecorder({ stores, unitOfWork, log = console }:
         return { ...row, categoryId };
       });
 
-      return { transactionId: id, created, categoryName: await nameOf(userId, categoryId) };
+      return { transactionId: id, created, categoryId, categoryName: await nameOf(userId, categoryId) };
     },
   };
 }

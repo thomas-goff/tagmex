@@ -106,6 +106,18 @@ describe('correct category', () => {
     );
   });
 
+  test('finds similar uncategorised transactions, and can learn without applying', async () => {
+    const rows = [row('t1', 'CORNER SHOP'), row('t2', 'CORNER SHOP'), row('t3', 'CORNER SHOP'), row('t4', 'OTHER')];
+    const { stores, unitOfWork, rules } = fakeStores(rows, [groceries]);
+    const corrector = createCategoryCorrector({ stores, unitOfWork });
+    assert.deepEqual(await corrector.findSimilar(USER, 't1'), ['t2', 't3']);
+
+    const result = await corrector.correct({ userId: USER, transactionId: 't1', categoryId: 'cat-groceries', applyToSimilar: false });
+    assert.equal(result.appliedTo, 0);
+    assert.equal(rules.length, 1);
+    assert.deepEqual(rows.map((r) => r.categorySource), ['manual', 'none', 'none', 'none']);
+  });
+
   test('correcting again re-points the same learned rule', async () => {
     const other: Category = { id: 'cat-other', name: 'Eating Out', kind: 'expense', isSystem: false };
     const rows = [row('t1', 'CORNER SHOP')];

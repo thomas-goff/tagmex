@@ -3,14 +3,16 @@ import type { CategoryKind, ExpenseType } from './types';
 // Starter data for a new user, applied by `npm run db:seed` (idempotent: existing rows are kept, so
 // renaming or re-pointing anything in the database is never undone by a re-seed).
 //
-// Categories are the old transaction-tracker defaults. Its "Salary" and "Other Income" become the
-// single system Income category, and Transfer is a system category. Both are found by kind.
+// Categories are the old transaction-tracker defaults. Its "Other Income" becomes the system Income
+// category, and Transfer is a system category; both are found by kind. Salary is a plain income
+// category flagged isSalary: its credits open budget cycles (phase 3).
 
 export interface CategorySeed {
   name: string;
   kind: CategoryKind;
   expenseType: ExpenseType | null;
   isSystem: boolean;
+  isSalary?: boolean;
 }
 
 export const DEFAULT_CATEGORIES = [
@@ -26,6 +28,7 @@ export const DEFAULT_CATEGORIES = [
   { name: 'Subscriptions', kind: 'expense', expenseType: 'static', isSystem: false },
   { name: 'Personal Care', kind: 'expense', expenseType: 'dynamic', isSystem: false },
   { name: 'Transport', kind: 'expense', expenseType: 'dynamic', isSystem: false },
+  { name: 'Salary', kind: 'income', expenseType: null, isSystem: false, isSalary: true },
   { name: 'Income', kind: 'income', expenseType: null, isSystem: true },
   { name: 'Transfer', kind: 'transfer', expenseType: null, isSystem: true },
 ] as const satisfies readonly CategorySeed[];
@@ -106,6 +109,6 @@ export const DEFAULT_MERCHANT_RULES: readonly MerchantRuleSeed[] = [
   { pattern: 'MTN', category: 'Utilities' },
   { pattern: 'TELKOM', category: 'Utilities' },
 
-  // Income (added): EFT salary references normalise to "SALARY"
-  { pattern: 'SALARY', category: 'Income' },
+  // Salary (added): EFT salary references normalise to "SALARY"
+  { pattern: 'SALARY', category: 'Salary' },
 ];
