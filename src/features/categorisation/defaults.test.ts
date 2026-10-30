@@ -49,12 +49,14 @@ describe('default seeds', () => {
     assert.equal(categoryOf('UBER *EATS'), 'Eating Out');
     assert.equal(categoryOf('UBER *TRIP'), 'Transport');
     assert.equal(categoryOf('APPLE.COM/BILL'), 'Subscriptions');
+    assert.equal(categoryOf('GOOGLE YOUTUBEPREMIUM LONDON'), 'Subscriptions');
+    assert.equal(categoryOf('GOOGLE ONE LONDON'), 'Subscriptions');
     assert.equal(categoryOf('DIS-CHEM CANAL WALK'), 'Medical');
     assert.equal(categoryOf('SALARY'), 'Income');
   });
 
   test('leave look-alikes uncategorised', () => {
-    for (const d of ['BPA HOLDINGS', 'SHELLEY BEAUTY', 'SPARK SCHOOLS', 'TOTALSPORTS', 'APPLE STORE', 'BOLTON HARDWARE']) {
+    for (const d of ['BPA HOLDINGS', 'SHELLEY BEAUTY', 'SPARK SCHOOLS', 'TOTALSPORTS', 'APPLE STORE', 'BOLTON HARDWARE', 'GOOGLE CLOUD', 'ONE GOOGLE']) {
       assert.equal(categoryOf(d), null, d);
     }
   });

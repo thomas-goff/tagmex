@@ -49,7 +49,9 @@ account within 3 days) → uncategorised (`category_id` null). Discord shows the
 | `src/features/transactions/correct-category.ts` | Correct a category, learn a rule, apply it to past uncategorised rows |
 | `src/features/transactions/ledger.ts` | Wires services to a database (app: `index.ts`; scripts: their own connection) |
 
-To add a merchant rule for everyone, add it to `DEFAULT_MERCHANT_RULES` and re-run `npm run db:seed`.
+To add a merchant rule for everyone, add it to `DEFAULT_MERCHANT_RULES` (with a test in
+`defaults.test.ts`) and re-run `npm run db:seed`. The seed adds missing rules, then runs all rules
+over transactions that are still uncategorised. Categorised rows are never changed.
 
 ### Rollout (do these in order, once)
 
@@ -69,8 +71,8 @@ export CRON_SECRET=<the CRON_SECRET from Vercel>
    ```
 
 2. **Seed** categories and merchant rules. Uses `DATABASE_URL` from `.env.local`. Check the
-   `Database:` host it prints is your Supabase project. Expect `Added 14 categories and 42 merchant
-   rules`. A second run adds 0.
+   `Database:` host it prints is your Supabase project. On a new database, expect `Added 14 categories and
+   44 merchant rules`. A second run adds 0.
 
    ```bash
    npm run db:seed
