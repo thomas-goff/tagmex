@@ -6,11 +6,10 @@ import { absaParser } from '@/features/bank-email/absa/parser';
 import type { BankEmail, ParseResult } from '@/features/bank-email/types';
 import { bankMailQuery, gmail, isBankSender } from '@/features/gmail';
 import { GmailError } from '@/features/gmail/client';
+import { ledger } from '@/features/transactions';
+import type { RecordOutcome, TransactionRecorder } from '@/features/transactions/record-transaction';
 import type { NotifiableEmail } from './format';
 import { postToDiscord } from './post-to-discord';
-
-// Single user until Clerk arrives in phase 3.
-export const OWNER_USER_ID = 'owner';
 
 // Messages examined per run, to stay inside the route's maxDuration. The cursor resumes the rest.
 const MAX_MESSAGES_PER_RUN = 40;
@@ -23,6 +22,13 @@ const BOOTSTRAP_WINDOW = '30d';
 interface Outcome extends NotifiableEmail {
   rowId: string;
   alreadyNotified: boolean;
+  // Parsed emails only: their ledger row.
+  recorded?: RecordOutcome;
+}
+
+interface RunContext {
+  userId: string;
+  recorder: TransactionRecorder;
 }
 
 interface NewMail {
@@ -48,6 +54,7 @@ export async function syncMailbox(userId: string, { retryFailed = false } = {}) 
     const profile = await gmail().getProfile();
     const conn = await connectionFor(userId, profile.emailAddress);
     await db.update(syncRuns).set({ mailboxConnectionId: conn.id }).where(eq(syncRuns.id, run!.id));
+    const ctx: RunContext = { userId, recorder: ledger.createRecorder() };
 
     const outcomes: Outcome[] = [];
     const record = (o: Outcome) => {
@@ -58,7 +65,7 @@ export async function syncMailbox(userId: string, { retryFailed = false } = {}) 
 
     // 1. Rows a dead run left behind, plus failed ones when asked to retry after a parser fix.
     for (const row of await reclaim(conn.id, retryFailed)) {
-      record(await processMessage(row.id, row.gmail_message_id, row.notified_at !== null));
+      record(await processMessage(ctx, row.id, row.gmail_message_id, row.notified_at !== null));
     }
 
     // 2. New mail since the cursor.
@@ -69,11 +76,14 @@ export async function syncMailbox(userId: string, { retryFailed = false } = {}) 
     for (const id of newMail.messageIds) {
       if (newMail.checkSender && !isBankSender(await senderOf(id))) continue;
       const rowId = await claim(conn.id, id);
-      if (rowId) record(await processMessage(rowId, id, false));
+      if (rowId) record(await processMessage(ctx, rowId, id, false));
     }
 
-    // 3. Discord. Parsed transactions always post; a failure posts once, not again on every retry.
-    const due = outcomes.filter((o) => o.result.status === 'parsed' || (o.result.status === 'failed' && !o.alreadyNotified));
+    // 3. Discord. A transaction posts when this run created its ledger row, or when an earlier run
+    // created it but died before posting. A failure posts once, not again on every retry.
+    const due = outcomes.filter((o) =>
+      o.recorded ? o.recorded.created || !o.alreadyNotified : o.result.status === 'failed' && !o.alreadyNotified,
+    );
     await postToDiscord(due, { onPosted: markNotified });
 
     // 4. Advance the cursor only once everything above succeeded.
@@ -183,7 +193,12 @@ async function reclaim(mailboxConnectionId: string, retryFailed: boolean) {
   `);
 }
 
-async function processMessage(rowId: string, gmailId: string, alreadyNotified: boolean): Promise<Outcome> {
+async function processMessage(
+  { userId, recorder }: RunContext,
+  rowId: string,
+  gmailId: string,
+  alreadyNotified: boolean,
+): Promise<Outcome> {
   let email: BankEmail | null = null;
   let result: ParseResult;
   try {
@@ -193,6 +208,13 @@ async function processMessage(rowId: string, gmailId: string, alreadyNotified: b
     if (!(err instanceof GmailError && err.status === 404)) throw err; // row stays claimed; recovered later
     result = { status: 'ignored', reason: 'message no longer exists in Gmail' };
   }
+
+  // Ledger row before the status update: if the run dies in between, the message is reclaimed and
+  // the insert finds the existing transaction instead of creating a second one.
+  const recorded =
+    result.status === 'parsed'
+      ? await recorder.record({ userId, ingestedMessageId: rowId, gmailMessageId: gmailId, transaction: result.transaction })
+      : undefined;
 
   await db
     .update(ingestedMessages)
@@ -204,7 +226,15 @@ async function processMessage(rowId: string, gmailId: string, alreadyNotified: b
     })
     .where(eq(ingestedMessages.id, rowId));
 
-  return { rowId, gmailId, subject: email?.subject ?? '', result, alreadyNotified };
+  return {
+    rowId,
+    gmailId,
+    subject: email?.subject ?? '',
+    result,
+    alreadyNotified,
+    recorded,
+    categoryName: recorded?.categoryName ?? null,
+  };
 }
 
 async function markNotified(posted: Outcome[]) {

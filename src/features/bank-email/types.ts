@@ -7,16 +7,20 @@ export interface BankEmail {
   receivedAt: Date;
 }
 
-export type TransactionKind =
-  | 'card_purchase'
-  | 'debit_order'
-  | 'payment'
-  | 'transfer'
-  | 'credit'
-  | 'reversal'
-  | 'fee'
-  | 'withdrawal'
-  | 'other';
+// Also the `transaction_kind` enum in the database: adding one here needs a migration.
+export const TRANSACTION_KINDS = [
+  'card_purchase',
+  'debit_order',
+  'payment',
+  'transfer',
+  'credit',
+  'reversal',
+  'fee',
+  'withdrawal',
+  'other',
+] as const;
+
+export type TransactionKind = (typeof TRANSACTION_KINDS)[number];
 
 export interface ParsedTransaction {
   // Integer cents. Negative = expense.

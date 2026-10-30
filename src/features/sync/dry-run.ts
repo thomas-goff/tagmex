@@ -2,16 +2,21 @@ import 'server-only';
 import { absaParser } from '@/features/bank-email/absa/parser';
 import { bankMailQuery, gmail } from '@/features/gmail';
 import { notify } from '@/features/notifications/discord';
+import { ledger } from '@/features/transactions';
 import type { NotifiableEmail } from './format';
 import { postToDiscord } from './post-to-discord';
 
-// Parses the last `limit` bank emails and posts them to Discord. Writes nothing to the database,
-// so it is safe to run repeatedly.
-export async function dryRunSync(limit: number) {
+// Parses the last `limit` bank emails, previews their categories and posts them to Discord.
+// Reads rules from the database but writes nothing to it, so it is safe to run repeatedly.
+export async function dryRunSync(userId: string, limit: number) {
+  const recorder = ledger.createRecorder();
   const items: NotifiableEmail[] = [];
   for (const id of await gmail().listMessageIds(bankMailQuery('30d'), limit)) {
     const email = await gmail().getEmail(id);
-    items.push({ gmailId: id, subject: email.subject, result: absaParser.parse(email) });
+    const result = absaParser.parse(email);
+    const categoryName =
+      result.status === 'parsed' ? (await recorder.preview(userId, result.transaction)).categoryName : undefined;
+    items.push({ gmailId: id, subject: email.subject, result, categoryName });
   }
 
   const postable = items.filter((i) => i.result.status !== 'ignored');
