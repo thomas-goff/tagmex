@@ -17,7 +17,12 @@ let config: z.infer<typeof schema> | null = null;
 let client: ClerkClient | null = null;
 
 function clerkEnv() {
-  return (config ??= schema.parse(process.env));
+  // Clerk's dashboard hands the publishable key out as NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY; it isn't
+  // secret, so either name works.
+  return (config ??= schema.parse({
+    ...process.env,
+    CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+  }));
 }
 
 function clerk() {

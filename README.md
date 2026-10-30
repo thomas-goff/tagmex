@@ -18,7 +18,7 @@ npm test        # unit tests (node:test via tsx)
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google Cloud "Desktop app" OAuth client |
 | `GMAIL_REFRESH_TOKEN` | from `npm run gmail:auth` |
 | `GMAIL_SENDER` | optional, default `notifyme@absa.co.za`; used as `from:` and matched against From |
-| `CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` | Clerk → API keys. Needed for `/api/mcp` only |
+| `CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` | Clerk → API keys. Needed for `/api/mcp` only. `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` (the dashboard's name) works too |
 | `DISCORD_WEBHOOK_URL` | **#transactions**, and the fallback for the three below |
 | `DISCORD_REVIEW_WEBHOOK_URL` | optional, **#needs-review** |
 | `DISCORD_BUDGET_WEBHOOK_URL` | optional, **#budget** |
