@@ -9,8 +9,8 @@ import { postToDiscord } from './post-to-discord';
 // so it is safe to run repeatedly.
 export async function dryRunSync(limit: number) {
   const items: NotifiableEmail[] = [];
-  for (const id of await gmail.listMessageIds(bankMailQuery('30d'), limit)) {
-    const email = await gmail.getEmail(id);
+  for (const id of await gmail().listMessageIds(bankMailQuery('30d'), limit)) {
+    const email = await gmail().getEmail(id);
     items.push({ gmailId: id, subject: email.subject, result: absaParser.parse(email) });
   }
 

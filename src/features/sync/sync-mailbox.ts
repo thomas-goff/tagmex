@@ -45,7 +45,7 @@ export async function syncMailbox(userId: string, { retryFailed = false } = {}) 
       .where(eq(syncRuns.id, run!.id));
 
   try {
-    const profile = await gmail.getProfile();
+    const profile = await gmail().getProfile();
     const conn = await connectionFor(userId, profile.emailAddress);
     await db.update(syncRuns).set({ mailboxConnectionId: conn.id }).where(eq(syncRuns.id, run!.id));
 
@@ -98,7 +98,7 @@ async function connectionFor(userId: string, gmailAddress: string) {
 async function fromHistory(startHistoryId: string, budget: number): Promise<NewMail | null> {
   let history;
   try {
-    history = await gmail.listHistory(startHistoryId);
+    history = await gmail().listHistory(startHistoryId);
   } catch (err) {
     // Stale cursor: Gmail only keeps about a week of history. Fall back to search and re-baseline.
     if (err instanceof GmailError && err.status === 404) return null;
@@ -121,7 +121,7 @@ async function fromHistory(startHistoryId: string, budget: number): Promise<NewM
 // First run, or after a stale cursor. `baselineHistoryId` is read before searching so nothing that
 // arrives meanwhile is missed; it is only saved once the whole search result has been processed.
 async function fromSearch(baselineHistoryId: string, budget: number): Promise<NewMail> {
-  const ids = await gmail.listMessageIds(bankMailQuery(BOOTSTRAP_WINDOW));
+  const ids = await gmail().listMessageIds(bankMailQuery(BOOTSTRAP_WINDOW));
   const known = await alreadyIngested(ids);
   const fresh = ids.filter((id) => !known.has(id)).reverse(); // oldest first
   return {
@@ -143,7 +143,7 @@ async function alreadyIngested(gmailIds: string[]) {
 
 async function senderOf(gmailId: string) {
   try {
-    return await gmail.getSender(gmailId);
+    return await gmail().getSender(gmailId);
   } catch (err) {
     if (err instanceof GmailError && err.status === 404) return ''; // deleted since it arrived
     throw err;
@@ -187,7 +187,7 @@ async function processMessage(rowId: string, gmailId: string, alreadyNotified: b
   let email: BankEmail | null = null;
   let result: ParseResult;
   try {
-    email = await gmail.getEmail(gmailId);
+    email = await gmail().getEmail(gmailId);
     result = absaParser.parse(email);
   } catch (err) {
     if (!(err instanceof GmailError && err.status === 404)) throw err; // row stays claimed; recovered later
