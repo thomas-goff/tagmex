@@ -8,6 +8,9 @@ import { frontendApiUrl } from './clerk-keys';
 const schema = z.object({
   CLERK_SECRET_KEY: z.string().regex(/^sk_(test|live)_/, 'must start with sk_test_ or sk_live_'),
   CLERK_PUBLISHABLE_KEY: z.string().regex(/^pk_(test|live)_/, 'must start with pk_test_ or pk_live_'),
+  // Escape hatch only: accept tokens without this server's URL as their audience. Needed only if
+  // the MCP server isn't registered as a resource on the Clerk instance (see README).
+  CLERK_SKIP_AUDIENCE_CHECK: z.enum(['true', 'false', '']).optional(),
 });
 
 let config: z.infer<typeof schema> | null = null;
@@ -27,11 +30,14 @@ export function authorizationServerUrl() {
   return frontendApiUrl(clerkEnv().CLERK_PUBLISHABLE_KEY);
 }
 
-// Verifies a Clerk OAuth access token (opaque or JWT) with Clerk. Null when it's invalid, expired
-// or revoked.
-export async function verifyClerkToken(token: string): Promise<VerifiedToken | null> {
-  const state = await clerk().authenticateRequest(new Request('https://tagmex.invalid/api/mcp', { headers: { authorization: `Bearer ${token}` } }), {
+// Verifies a Clerk OAuth access token (opaque or JWT) with Clerk. Null when it's invalid, expired,
+// revoked, or issued for another resource: its audience must be this server's URL, so a token
+// the same Clerk instance minted for something else is refused.
+export async function verifyClerkToken(token: string, audience: string): Promise<VerifiedToken | null> {
+  const skipAudience = clerkEnv().CLERK_SKIP_AUDIENCE_CHECK === 'true';
+  const state = await clerk().authenticateRequest(new Request(audience, { headers: { authorization: `Bearer ${token}` } }), {
     acceptsToken: 'oauth_token',
+    ...(skipAudience ? {} : { audience }),
   });
   if (!state.isAuthenticated) return null;
   const auth = state.toAuth();

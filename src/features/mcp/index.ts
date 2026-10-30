@@ -8,7 +8,7 @@ import { ledger } from '@/features/transactions';
 import { createAppUserRepo } from '@/features/users/app-users';
 import { createAuditLog } from './audit';
 import { verifiedEmails, verifyClerkToken } from './clerk';
-import { createMcpEndpoint, resourceMetadataUrl } from './server';
+import { createMcpEndpoint, resourceMetadataUrl, resourceUrl } from './server';
 
 const users = createAppUserRepo(db);
 
@@ -29,9 +29,12 @@ export const handleMcpRequest = createMcpEndpoint({
       return { fetched, parsed, ignored, failed };
     },
   },
-  auth: (request) => ({
-    verifyToken: verifyClerkToken,
-    resolveUserId,
-    resourceMetadataUrl: resourceMetadataUrl(new URL(request.url).origin),
-  }),
+  auth: (request) => {
+    const origin = new URL(request.url).origin;
+    return {
+      verifyToken: (token) => verifyClerkToken(token, resourceUrl(origin)),
+      resolveUserId,
+      resourceMetadataUrl: resourceMetadataUrl(origin),
+    };
+  },
 });

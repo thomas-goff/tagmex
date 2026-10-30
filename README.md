@@ -195,12 +195,18 @@ deduplicated in `notifications_sent`, so retries never repeat one.
 1. **Migrate** (already done if you're reading this after the PR): `npm run db:migrate`. It adds
    the tables, moves the `SALARY` rule and its transactions from Income to a new Salary category,
    and schedules `budget-digest` (hourly) and `mcp-audit-retention` (daily) in Supabase Cron.
-2. **Clerk**: create an application (free plan).
+2. **Clerk** (free plan):
    - *Configure → Restrictions*: sign-up mode **Restricted**, and allowlist your email.
-   - *Configure → OAuth applications*: turn on **Dynamic client registration** (MCP clients
-     register themselves). Leave the default scopes.
+   - **Register the MCP server as an OAuth resource**, with URL `https://<your-app>/api/mcp`.
+     This turns on the audience claim, so tokens carry that URL and `/api/mcp` refuses tokens
+     minted for anything else. It also turns on client registration (client ID metadata
+     documents), so Claude can register itself. The Clerk MCP connector's `configure_mcp_server`
+     does this; `check_mcp_server` then checks discovery against the deployed app. If clients
+     still can't register, enable **Dynamic client registration** under OAuth settings.
    - *API keys*: copy the publishable and secret keys into Vercel (`CLERK_PUBLISHABLE_KEY`,
      `CLERK_SECRET_KEY`) and `.env.local`.
+   - Only if a client can't get a token with the right audience: set `CLERK_SKIP_AUDIENCE_CHECK=true`
+     (weaker: any token from this Clerk instance is accepted) and tell me, it's tech debt.
 3. **Allow yourself in** (the app's own allowlist, on top of Clerk's): the email must be one you
    verify in Clerk. Already done for the owner; for someone else, give them their own `--id`.
 
