@@ -80,6 +80,8 @@ export const DEFAULT_MERCHANT_RULES: readonly MerchantRuleSeed[] = [
   { pattern: 'SPOTIFY', category: 'Subscriptions' },
   { pattern: 'SHOWMAX', category: 'Subscriptions' },
   { pattern: 'YOUTUBE', category: 'Subscriptions' },
+  { pattern: 'YOUTUBEPREMIUM', category: 'Subscriptions' }, // added: Absa sends "GOOGLE YOUTUBEPREMIUM LONDON"
+  { pattern: 'GOOGLE ONE', category: 'Subscriptions' }, // added
   { pattern: 'APPLE COM BILL', category: 'Subscriptions' },
   { pattern: 'DSTV', category: 'Subscriptions' }, // added
 

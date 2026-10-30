@@ -1,9 +1,11 @@
 import { DEFAULT_CATEGORIES, DEFAULT_MERCHANT_RULES } from '@/features/categorisation/defaults';
+import { applyRulesToUncategorised } from './apply-rules';
 import type { Stores } from './ports';
 
-// Gives a user the starter categories and merchant rules. Safe to re-run: only missing rows are
+// Gives a user the starter categories and merchant rules, then runs the rules over transactions
+// still uncategorised so newly added seeds fix past rows too. Safe to re-run: only missing rows are
 // added. A renamed default comes back under its old name, so rename by editing defaults.ts too.
-export async function seedDefaults(stores: Pick<Stores, 'categories'>, userId: string) {
+export async function seedDefaults(stores: Pick<Stores, 'categories' | 'transactions'>, userId: string) {
   const addedCategories = await stores.categories.insertCategoriesIfMissing(
     userId,
     DEFAULT_CATEGORIES.map((c, i) => ({ ...c, sortOrder: i })),
@@ -18,5 +20,6 @@ export async function seedDefaults(stores: Pick<Stores, 'categories'>, userId: s
     }),
   );
 
-  return { addedCategories, addedRules };
+  const categorisedExisting = await applyRulesToUncategorised(stores, userId);
+  return { addedCategories, addedRules, categorisedExisting };
 }
