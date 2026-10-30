@@ -357,7 +357,7 @@ function toView({ amount, ...r }: { amount: string } & Omit<TransactionView, 'am
   return { ...r, amountCents: decimalToCents(amount) };
 }
 
-function escapeLike(s: string) {
+export function escapeLike(s: string) {
   return s.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 

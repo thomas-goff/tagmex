@@ -16,5 +16,13 @@ export function createAuditLog(db: Database): AuditLog {
         .where(and(eq(mcpAuditLog.userId, userId), gte(mcpAuditLog.at, since)));
       return row?.n ?? 0;
     },
+
+    async countOkSince(userId, tool, since) {
+      const [row] = await db
+        .select({ n: count() })
+        .from(mcpAuditLog)
+        .where(and(eq(mcpAuditLog.userId, userId), eq(mcpAuditLog.tool, tool), eq(mcpAuditLog.status, 'ok'), gte(mcpAuditLog.at, since)));
+      return row?.n ?? 0;
+    },
   };
 }

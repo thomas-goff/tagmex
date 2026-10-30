@@ -46,6 +46,8 @@ export interface UncategorisedGroup {
   lastOccurredOn: string;
   // Correcting this one transaction teaches a rule that fixes the rest of the group.
   latestTransactionId: string;
+  // The accounts the group's transactions were on.
+  accounts: { accountType: string; accountLast4: string }[];
 }
 
 export interface TransactionStore {

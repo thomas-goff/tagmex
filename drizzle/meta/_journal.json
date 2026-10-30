@@ -57,6 +57,13 @@
       "when": 1793399561278,
       "tag": "0007_discord_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793402776607,
+      "tag": "0008_account_labels",
+      "breakpoints": true
     }
   ]
 }
