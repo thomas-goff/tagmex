@@ -14,7 +14,10 @@
     "db:custom": "drizzle-kit generate --custom --name",
     "db:migrate": "drizzle-kit migrate",
     "typecheck": "tsc --noEmit",
-    "gmail:auth": "tsx scripts/gmail-auth.ts"
+    "gmail:auth": "tsx scripts/gmail-auth.ts",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "db:seed": "tsx scripts/seed.ts",
+    "transactions:backfill": "tsx scripts/backfill-transactions.ts"
   },
   "dependencies": {
     "cheerio": "1.2.0",

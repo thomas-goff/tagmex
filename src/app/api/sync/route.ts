@@ -1,32 +1,30 @@
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { env } from '@/env';
+import { hasCronSecret, unauthorised } from '@/features/auth/cron-secret';
 import { notify } from '@/features/notifications/discord';
 import { dryRunSync } from '@/features/sync/dry-run';
-import { OWNER_USER_ID, syncMailbox } from '@/features/sync/sync-mailbox';
+import { syncMailbox } from '@/features/sync/sync-mailbox';
+import { OWNER_USER_ID } from '@/features/users/owner';
 
 // Batches are sized to finish well inside this; Supabase Cron's pg_net timeout is set to match.
 export const maxDuration = 60;
 
 const dryRunLimit = z.coerce.number().int().min(1).max(25).catch(10);
 
-function authorised(req: Request) {
-  return req.headers.get('authorization') === `Bearer ${env.CRON_SECRET}`;
-}
-
-// GET /api/sync?dryRun=true&limit=10: parse the last N bank emails and post them, writing nothing.
+// GET /api/sync?dryRun=true&limit=10: parse and categorise the last N bank emails and post them,
+// writing nothing.
 export async function GET(req: NextRequest) {
-  if (!authorised(req)) return new Response('Unauthorized', { status: 401 });
+  if (!hasCronSecret(req)) return unauthorised();
   const params = req.nextUrl.searchParams;
   if (params.get('dryRun') !== 'true') {
     return Response.json({ error: 'GET only supports ?dryRun=true; POST runs a real sync' }, { status: 400 });
   }
-  return run('dry run', () => dryRunSync(dryRunLimit.parse(params.get('limit') ?? undefined)));
+  return run('dry run', () => dryRunSync(OWNER_USER_ID, dryRunLimit.parse(params.get('limit') ?? undefined)));
 }
 
 // POST /api/sync (Supabase Cron, every 30 min). ?retryFailed=true also re-runs failed parses.
 export async function POST(req: NextRequest) {
-  if (!authorised(req)) return new Response('Unauthorized', { status: 401 });
+  if (!hasCronSecret(req)) return unauthorised();
   const retryFailed = req.nextUrl.searchParams.get('retryFailed') === 'true';
   return run('sync', () => syncMailbox(OWNER_USER_ID, { retryFailed }));
 }
