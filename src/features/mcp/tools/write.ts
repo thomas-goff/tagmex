@@ -24,6 +24,13 @@ function amountOrThrow(value: number | string, field: string) {
   }
 }
 
+// Zero would make every salary credit "outside tolerance" and silently stop cycles opening.
+function positiveSalary(value: number | string) {
+  const cents = amountOrThrow(value, 'expected_amount');
+  if (cents === 0) throw new ToolError('expected_amount must be more than R0; pass null to accept any amount.');
+  return cents;
+}
+
 async function categoryOrThrow({ principal, deps }: ToolContext, ref: string) {
   const categories = await deps.ledger.stores.categories.listCategories(principal.userId);
   const category = findCategory(categories, ref);
@@ -182,7 +189,7 @@ const setSalaryConfig = defineTool({
     await deps.repo.updateSettings(principal.userId, {
       salaryDayHint: args.salary_day,
       expectedSalaryCents:
-        args.expected_amount === undefined ? undefined : args.expected_amount === null ? null : amountOrThrow(args.expected_amount, 'expected_amount'),
+        args.expected_amount === undefined ? undefined : args.expected_amount === null ? null : positiveSalary(args.expected_amount),
       salaryTolerancePct: args.tolerance_pct,
     });
     const s = await deps.repo.getSettings(principal.userId);

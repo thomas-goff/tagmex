@@ -184,7 +184,9 @@ stand?" from the ledger. Discord gets a daily digest and alerts without you aski
 | #budget | Daily digest from 07:00 SAST, 80% / 100% category alerts, salary landed + last cycle recap, salary overdue | `DISCORD_BUDGET_WEBHOOK_URL` |
 | #system | Parse failures, sync / Gmail token failures (once a day per error, with a ping), no successful sync for 2h (ping), heartbeat, dry runs | `DISCORD_SYSTEM_WEBHOOK_URL` |
 
-Channels without a webhook fall back to #transactions. Set notification levels per channel in
+Channels without a webhook fall back to #transactions. Set `DISCORD_REVIEW_WEBHOOK_URL` before
+going live: a message can only be edited through the webhook that posted it, so review messages
+posted while it fell back won't get ticked off. Set notification levels per channel in
 Discord (e.g. #system on "@mentions only", so only the pings reach you). Every digest and alert is
 deduplicated in `notifications_sent`, so retries never repeat one.
 

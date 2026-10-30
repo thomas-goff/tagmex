@@ -152,8 +152,9 @@ describe('trend and tips', () => {
     assert.equal(savings.data.saved, '28000.00');
   });
 
-  test('salary overdue is the first tip', () => {
+  test('salary overdue is the first tip, and there is no daily allowance', () => {
     const late = summarise(november, '2026-12-02', []);
+    assert.equal(late.dailyAllowanceCents, null);
     assert.equal(deriveTips({ current: late, previous: null })[0]!.code, 'salary_overdue');
   });
 

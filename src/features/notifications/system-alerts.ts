@@ -23,7 +23,16 @@ export function errorFingerprint(message: string) {
 
 export function createSystemAlerts({ claims, post, log = console }: SystemAlertDeps) {
   async function once(userId: string, kind: string, key: string, content: string) {
-    if (!(await claims.claim(userId, kind, key))) return 'already_sent' as const;
+    let claimed: boolean;
+    try {
+      claimed = await claims.claim(userId, kind, key);
+    } catch (err) {
+      // The database itself is likely the problem: say so undeduplicated rather than not at all.
+      log.error(`claiming ${key} failed; posting without dedupe`, err);
+      await post(content, 'system', { ping: true });
+      return 'sent_without_dedupe' as const;
+    }
+    if (!claimed) return 'already_sent' as const;
     try {
       await post(content, 'system', { ping: true });
       return 'sent' as const;

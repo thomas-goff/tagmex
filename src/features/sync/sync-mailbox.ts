@@ -56,6 +56,9 @@ export async function syncMailbox(userId: string, { retryFailed = false } = {}) 
   try {
     const profile = await gmail().getProfile();
     const conn = await connectionFor(userId, profile.emailAddress);
+    // The Gmail token is still a single env var (one mailbox), so only that mailbox's owner may
+    // sync it. Anyone else would record the owner's bank mail as their own.
+    if (conn.userId !== userId) throw new Error(`mailbox ${profile.emailAddress} belongs to another user`);
     await db.update(syncRuns).set({ mailboxConnectionId: conn.id }).where(eq(syncRuns.id, run!.id));
     const ctx: RunContext = { userId, recorder: ledger.createRecorder() };
 

@@ -31,7 +31,7 @@ export function digestMessage(s: CycleSummary, tips: Tip[]) {
       : `💰 ${status.daysToSalary} day${status.daysToSalary === 1 ? '' : 's'} to salary (${shortDate(cycle.end)})`,
   );
   lines.push(
-    `🧮 Discretionary left ${formatRand(s.discretionaryLeftCents)} → **${formatRand(s.dailyAllowanceCents ?? 0)}/day** · spent ${formatRand(s.spentCents)} of ${formatRand(s.allocatedCents)} budgeted`,
+    `🧮 Discretionary left ${formatRand(s.discretionaryLeftCents)}${s.dailyAllowanceCents === null ? '' : ` → **${formatRand(s.dailyAllowanceCents)}/day**`} · spent ${formatRand(s.spentCents)} of ${formatRand(s.allocatedCents)} budgeted`,
   );
   if (s.pendingDebitOrders.length > 0) {
     const items = s.pendingDebitOrders

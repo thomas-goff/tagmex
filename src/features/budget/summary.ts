@@ -52,7 +52,7 @@ export interface CycleSummary {
   pendingDebitOrders: PendingDebitOrder[];
   pendingTotalCents: number;
   discretionaryLeftCents: number;
-  // Current cycle only.
+  // Current cycle only, and not while salary is overdue.
   dailyAllowanceCents: number | null;
   uncategorised: { count: number; outCents: number; inCents: number };
 }
@@ -130,8 +130,11 @@ export function summariseCycle({ cycle, status, today, rows, lines }: Input): Cy
     pendingDebitOrders,
     pendingTotalCents: pendingDebitOrders.reduce((sum, p) => sum + p.allocatedCents, 0),
     discretionaryLeftCents,
+    // Not while salary is overdue: with no known payday, "per day" would mean everything today.
     dailyAllowanceCents:
-      status.daysToSalary === null ? null : Math.floor(discretionaryLeftCents / Math.max(status.daysToSalary, 1)),
+      status.daysToSalary === null || status.salaryOverdue
+        ? null
+        : Math.floor(discretionaryLeftCents / Math.max(status.daysToSalary, 1)),
     uncategorised,
   };
 }

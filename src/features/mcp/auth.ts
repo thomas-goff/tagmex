@@ -48,7 +48,13 @@ export async function authenticate(
   }
   if (!verified) return challenge('Invalid, expired or revoked token');
 
-  const userId = await resolveUserId(verified.clerkUserId);
+  let userId: string | null;
+  try {
+    userId = await resolveUserId(verified.clerkUserId);
+  } catch (err) {
+    console.error('MCP user lookup failed', err);
+    return bearerAuthChallengeResponse(new OAuthError(OAuthErrorCode.ServerError, 'User lookup failed'));
+  }
   if (!userId) {
     return Response.json(
       { error: 'access_denied', error_description: 'This account is not allowed to use tagmex.' },

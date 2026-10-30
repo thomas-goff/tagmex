@@ -133,6 +133,22 @@ describe('system alerts', () => {
     assert.ok(posts.every((p) => p.ping));
   });
 
+  test('when the database is down, the failure is still posted (without dedupe)', async () => {
+    const posts: string[] = [];
+    const alerts = createSystemAlerts({
+      claims: {
+        claim: async () => {
+          throw new Error('connection refused');
+        },
+        release: async () => {},
+      },
+      post: async (content) => void posts.push(content),
+      log: { error: () => {} },
+    });
+    assert.equal(await alerts.syncFailed('owner', 'sync', 'connection refused', '2026-11-01'), 'sent_without_dedupe');
+    assert.equal(posts.length, 1);
+  });
+
   test('stale sync: once per quiet spell, re-armed by the next success', async () => {
     const { alerts, posts } = system();
     const last = new Date('2026-11-01T08:00:00Z');

@@ -33,8 +33,10 @@ export async function postToDiscord<T extends NotifiableEmail>(
       for (const item of group.slice(0, REVIEW_LIMIT)) {
         const content = prefix + emailLine(item);
         const messageId = await postMessage('review', content);
-        await onReviewMessage?.(item, messageId, content);
+        // Marked as posted first: if remembering the message fails, it isn't posted again; it just
+        // won't be ticked off later.
         await onPosted([item]);
+        await onReviewMessage?.(item, messageId, content).catch((err) => console.error('recording a #needs-review message failed', err));
       }
       const rest = group.slice(REVIEW_LIMIT);
       if (rest.length > 0) {
