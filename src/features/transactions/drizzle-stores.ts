@@ -3,7 +3,7 @@ import type { Database } from '@/db/client';
 import { categories, categoryRules, ingestedMessages, mailboxConnections, transactions } from '@/db/schema';
 import type { CategoryRule } from '@/features/categorisation/types';
 import { centsToDecimal, decimalToCents } from './money';
-import type { CategoryStore, IngestedMessageStore, Stores, TransactionStore } from './ports';
+import type { CategoryStore, IngestedMessageStore, Stores, TransactionStore, UncategorisedGroup } from './ports';
 
 // `database` may be an open transaction, which is how UnitOfWork scopes these to one commit.
 export function createDrizzleStores(database: Database): Stores {
@@ -123,6 +123,7 @@ function transactionStore(db: Database): TransactionStore {
           total: sql<string>`sum(${transactions.amount})::text`,
           lastOccurredOn: sql<string>`max(${transactions.occurredOn})::text`,
           latestTransactionId: sql<string>`(array_agg(${transactions.id} order by ${transactions.occurredOn} desc))[1]`,
+          accounts: sql<UncategorisedGroup['accounts']>`jsonb_agg(distinct jsonb_build_object('accountType', ${transactions.accountType}, 'accountLast4', ${transactions.accountLast4}))`,
         })
         .from(transactions)
         .where(and(live(userId), uncategorised))

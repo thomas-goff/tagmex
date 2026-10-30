@@ -12,6 +12,7 @@ const INSTRUCTIONS = [
   CYCLE_NOTE,
   MONEY_NOTE,
   UNTRUSTED_NOTE,
+  'Accounts show as the bank\'s type and last 4 digits; list_accounts has the names the user gave them and the counterparties they named.',
   'Only change data (categorise, budgets, settings, exclusions) when the user asks or agrees.',
 ].join(' ');
 

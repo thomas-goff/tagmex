@@ -1,5 +1,6 @@
 import type { CallToolResult, McpServer, ToolAnnotations } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import type { AccountLabelRepo } from '@/features/accounts/repo';
 import type { BudgetRepo } from '@/features/budget/repo';
 import { ConflictError } from '@/features/budget/repo';
 import type { BudgetService } from '@/features/budget/service';
@@ -32,6 +33,7 @@ export interface AuditLog {
 export interface ToolDeps {
   budget: BudgetService;
   repo: BudgetRepo;
+  accounts: AccountLabelRepo;
   ledger: { stores: Pick<Stores, 'categories' | 'transactions'>; corrector: CategoryCorrector };
   audit: AuditLog;
   // #needs-review messages to tick off when their transactions are sorted.

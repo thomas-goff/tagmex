@@ -1,3 +1,4 @@
+import { maskedAccount, type AccountLabel, type KnownAccount, type Labeller } from '@/features/accounts/labels';
 import type { CycleSummary } from '@/features/budget/summary';
 import type { Cycle } from '@/features/cycle/cycle';
 import { addDays } from '@/features/cycle/dates';
@@ -18,6 +19,15 @@ const DESCRIPTION_LIMIT = 80;
 export function untrusted(text: string, limit = DESCRIPTION_LIMIT) {
   const clean = text.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, ' ').replace(/\s+/g, ' ').trim();
   return clean.length > limit ? `${clean.slice(0, limit - 1)}…` : clean;
+}
+
+// A transaction's account, with the user's name for it.
+export function accountJson(labels: Labeller, a: KnownAccount) {
+  return { account: maskedAccount(a), account_label: labels.account(a)?.label ?? null };
+}
+
+export function counterpartyJson(label: AccountLabel | null) {
+  return label && { label: label.label, note: label.note, matched_text: label.match };
 }
 
 // Money from the model: 1500, 1500.5, "1500.50", "R1,500.50". Never negative.

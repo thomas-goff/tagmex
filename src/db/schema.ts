@@ -16,6 +16,7 @@ import {
   uuid,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
+import { ACCOUNT_LABEL_KINDS } from '@/features/accounts/labels';
 import { TRANSACTION_KINDS } from '@/features/bank-email/types';
 import {
   CATEGORY_KINDS,
@@ -266,6 +267,27 @@ export const mcpAuditLog = pgTable(
     at: timestamptz('at').notNull().defaultNow(),
   },
   (t) => [index('mcp_audit_log_user_at_idx').on(t.userId, t.at)],
+).enableRLS();
+
+export const accountLabelKind = pgEnum('account_label_kind', ACCOUNT_LABEL_KINDS);
+
+// The user's own names for what the bank shows as codes, for reading the ledger. An `account` row
+// names one of their accounts, keyed by type + last 4 ("CHEQ1297"); a `counterparty` row names
+// whoever is behind text in descriptions, keyed by that text in upper case ("ABSA BANK SABIE PAYBACK").
+// Display only: categorisation never reads these.
+export const accountLabels = pgTable(
+  'account_labels',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    kind: accountLabelKind('kind').notNull(),
+    match: text('match').notNull(),
+    label: text('label').notNull(),
+    note: text('note'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (t) => [unique('account_labels_user_kind_match_unique').on(t.userId, t.kind, t.match)],
 ).enableRLS();
 
 // Discord messages that are edited later: a #needs-review post per uncategorised transaction,

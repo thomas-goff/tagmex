@@ -237,11 +237,12 @@ change: run `npm run users:allow -- --email you@example.com --unlink` and sign i
 ### MCP tools
 
 Read: `get_budget_overview` (start here), `list_transactions`, `get_uncategorised`,
-`list_categories`, `get_budget_items`, `get_pending_debit_orders`, `get_spending_trend`,
-`get_tips`, `get_sync_status`. Write: `categorise_transaction` (learns a rule; over 25 similar rows
-needs `confirm: true`), `create_category`, `set_budget_item`, `set_salary_config`,
-`set_notification_settings`, `exclude_transaction` / `restore_transaction` (soft delete),
-`reprocess_failed_messages`. No hard deletes, no SQL, every query scoped to the signed-in user.
+`list_categories`, `list_accounts`, `get_budget_items`, `get_pending_debit_orders`,
+`get_spending_trend`, `get_tips`, `get_sync_status`. Write: `categorise_transaction` (learns a rule;
+over 25 similar rows needs `confirm: true`), `create_category`, `set_budget_item`,
+`set_salary_config`, `set_notification_settings`, `exclude_transaction` / `restore_transaction`
+(soft delete), `set_account_label` (names an account such as `CHEQ …1297`, or the counterparty
+behind description text; shown next to transactions, display only), `reprocess_failed_messages`. No hard deletes, no SQL, every query scoped to the signed-in user.
 Every call is written to `mcp_audit_log` (kept 90 days) and limited to 60 a minute.
 
 ### Checks (Supabase SQL editor)

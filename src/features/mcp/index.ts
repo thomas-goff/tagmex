@@ -1,6 +1,7 @@
 // Composition root for the MCP endpoint: real database, Clerk and sync behind the pure pieces.
 import 'server-only';
 import { db } from '@/db';
+import { accountLabelRepo } from '@/features/accounts';
 import { budget, budgetRepo } from '@/features/budget';
 import { reviewMessages } from '@/features/notifications/review-messages';
 import { syncMailbox } from '@/features/sync/sync-mailbox';
@@ -21,6 +22,7 @@ export const handleMcpRequest = createMcpEndpoint({
   tools: {
     budget,
     repo: budgetRepo,
+    accounts: accountLabelRepo,
     ledger,
     audit: createAuditLog(db),
     review: reviewMessages,
