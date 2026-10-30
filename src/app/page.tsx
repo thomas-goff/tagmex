@@ -5,7 +5,9 @@ export default function Home() {
     <main>
       <h1>tagmex</h1>
       <p>A personal budgeting tool that reads bank notification emails.</p>
-      <Link href="/privacy">Privacy policy</Link>
+      <p>
+        <Link href="/privacy">Privacy policy</Link> · <Link href="/terms">Terms of service</Link>
+      </p>
     </main>
   );
 }
