@@ -17,9 +17,12 @@
     "gmail:auth": "tsx scripts/gmail-auth.ts",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "db:seed": "tsx scripts/seed.ts",
-    "transactions:backfill": "tsx scripts/backfill-transactions.ts"
+    "transactions:backfill": "tsx scripts/backfill-transactions.ts",
+    "users:allow": "tsx scripts/allow-user.ts"
   },
   "dependencies": {
+    "@clerk/backend": "3.26.5",
+    "@modelcontextprotocol/server": "2.4.0",
     "cheerio": "1.2.0",
     "drizzle-orm": "0.45.4",
     "next": "16.4.3",

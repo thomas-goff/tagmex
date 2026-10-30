@@ -27,9 +27,10 @@ export async function dryRunSync(userId: string, limit: number) {
     failed: items.filter((i) => i.result.status === 'failed').length,
   };
 
-  await postToDiscord(postable, { prefix: '[dry run] ' });
+  await postToDiscord(postable, { prefix: '[dry run] ', channel: 'system' });
   await notify(
     `[dry run] done · ${counts.fetched} fetched · ${counts.parsed} parsed · ${counts.ignored} ignored · ${counts.failed} failed`,
+    'system',
   );
   return { ...counts, items };
 }

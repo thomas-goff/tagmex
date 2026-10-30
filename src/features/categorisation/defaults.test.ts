@@ -42,6 +42,11 @@ describe('default seeds', () => {
     for (const c of DEFAULT_CATEGORIES) assert.equal(c.expenseType === null, c.kind !== 'expense', c.name);
   });
 
+  test('exactly one salary category, and it is income', () => {
+    const salary = DEFAULT_CATEGORIES.filter((c) => 'isSalary' in c && c.isSalary);
+    assert.deepEqual(salary.map((c) => [c.name, c.kind, c.isSystem]), [['Salary', 'income', false]]);
+  });
+
   test('categorise common merchants', () => {
     assert.equal(categoryOf('WOOLWORTHS SANDTON'), 'Groceries');
     assert.equal(categoryOf("PICK 'N PAY FAMILY"), 'Groceries');
@@ -52,7 +57,7 @@ describe('default seeds', () => {
     assert.equal(categoryOf('GOOGLE YOUTUBEPREMIUM LONDON'), 'Subscriptions');
     assert.equal(categoryOf('GOOGLE ONE LONDON'), 'Subscriptions');
     assert.equal(categoryOf('DIS-CHEM CANAL WALK'), 'Medical');
-    assert.equal(categoryOf('SALARY'), 'Income');
+    assert.equal(categoryOf('SALARY'), 'Salary');
   });
 
   test('leave look-alikes uncategorised', () => {

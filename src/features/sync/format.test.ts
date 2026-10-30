@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import type { ParsedTransaction } from '@/features/bank-email/types';
-import { emailLine, summaryMessage, type NotifiableEmail } from './format';
+import { resolvedReviewContent } from '@/features/notifications/review';
+import { channelFor, emailLine, summaryMessage, type NotifiableEmail } from './format';
 
 const parsed = (description: string, amountCents: number, categoryName: string | null): NotifiableEmail => ({
   gmailId: description,
@@ -33,6 +34,28 @@ describe('emailLine', () => {
 
   test('marks an uncategorised transaction', () => {
     assert.match(emailLine(parsed('CORNER SHOP', -500, null)), / · ❔ \*\*Uncategorised\*\* · /);
+  });
+});
+
+describe('channels and standing', () => {
+  test('categorised → #transactions, uncategorised → #needs-review, failures → #system', () => {
+    assert.equal(channelFor(parsed('WOOLWORTHS', -100, 'Groceries')), 'transactions');
+    assert.equal(channelFor(parsed('SALARY', 100, 'Salary')), 'transactions');
+    assert.equal(channelFor(parsed('CORNER SHOP', -100, null)), 'review');
+    assert.equal(channelFor({ gmailId: 'x', subject: 's', result: { status: 'failed', reason: 'no amount' } }), 'system');
+  });
+
+  test('the category budget rides along on the line', () => {
+    assert.equal(
+      emailLine({ ...parsed('WOOLWORTHS', -12345, 'Groceries'), standing: 'R450.00 of R4,000.00, 11%' }),
+      '🔻 **-R123.45** · WOOLWORTHS · 🏷️ Groceries (R450.00 of R4,000.00, 11%) · 2026-11-01 · card · acc 1234',
+    );
+  });
+
+  test('a review message is ticked off with its new category', () => {
+    const line = emailLine(parsed('CORNER SHOP', -500, null));
+    assert.equal(resolvedReviewContent(line, '🏷️ Groceries'), `✅ ${line.replace('❔ **Uncategorised**', '🏷️ Groceries')}`);
+    assert.equal(resolvedReviewContent('something else', '🗑️ excluded'), '✅ something else → 🗑️ excluded');
   });
 });
 

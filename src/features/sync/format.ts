@@ -6,6 +6,14 @@ export interface NotifiableEmail {
   result: ParseResult;
   // Parsed emails: the category name, or null when uncategorised.
   categoryName?: string | null;
+  // The category's budget this cycle, e.g. "R450.00 of R4,000.00 (11%)".
+  standing?: string | null;
+}
+
+// Categorised → #transactions, uncategorised → #needs-review, parse failures → #system.
+export function channelFor(item: NotifiableEmail): 'transactions' | 'review' | 'system' {
+  if (item.result.status !== 'parsed') return 'system';
+  return item.categoryName ? 'transactions' : 'review';
 }
 
 // Discord rejects content over 2000 characters.
@@ -29,25 +37,26 @@ export function formatRand(cents: number) {
   return `${cents < 0 ? '-' : ''}R${rands}.${String(abs % 100).padStart(2, '0')}`;
 }
 
-function escapeMarkdown(s: string) {
+export function escapeMarkdown(s: string) {
   return s.replace(/([*_~`|\\>])/g, '\\$1');
 }
 
-const UNCATEGORISED_LABEL = '❔ **Uncategorised**';
+export const UNCATEGORISED_LABEL = '❔ **Uncategorised**';
 
-function categoryLabel(name: string | null | undefined) {
+export function categoryLabel(name: string | null | undefined) {
   return name ? `🏷️ ${escapeMarkdown(name)}` : UNCATEGORISED_LABEL;
 }
 
-function transactionLine(t: ParsedTransaction, categoryName: string | null | undefined) {
+function transactionLine(t: ParsedTransaction, categoryName: string | null | undefined, standing: string | null | undefined) {
   const icon = t.amountCents < 0 ? '🔻' : '🟢';
-  return `${icon} **${formatRand(t.amountCents)}** · ${escapeMarkdown(t.description)} · ${categoryLabel(categoryName)} · ${t.occurredOn} · ${KIND_LABEL[t.kind]} · acc ${t.accountLast4}`;
+  const category = standing ? `${categoryLabel(categoryName)} (${standing})` : categoryLabel(categoryName);
+  return `${icon} **${formatRand(t.amountCents)}** · ${escapeMarkdown(t.description)} · ${category} · ${t.occurredOn} · ${KIND_LABEL[t.kind]} · acc ${t.accountLast4}`;
 }
 
-export function emailLine({ gmailId, subject, result, categoryName }: NotifiableEmail) {
+export function emailLine({ gmailId, subject, result, categoryName, standing }: NotifiableEmail) {
   switch (result.status) {
     case 'parsed':
-      return transactionLine(result.transaction, categoryName);
+      return transactionLine(result.transaction, categoryName, standing);
     case 'failed':
       return `⚠️ Could not parse "${escapeMarkdown(subject)}" (${gmailId}): ${result.reason}`;
     case 'ignored':

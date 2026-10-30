@@ -6,6 +6,9 @@ import { absaParser } from '@/features/bank-email/absa/parser';
 import type { BankEmail, ParseResult } from '@/features/bank-email/types';
 import { bankMailQuery, gmail, isBankSender } from '@/features/gmail';
 import { GmailError } from '@/features/gmail/client';
+import { budget } from '@/features/budget';
+import { budgetStanding } from '@/features/budget/standing';
+import { reviewMessages } from '@/features/notifications/review-messages';
 import { ledger } from '@/features/transactions';
 import type { RecordOutcome, TransactionRecorder } from '@/features/transactions/record-transaction';
 import type { NotifiableEmail } from './format';
@@ -53,6 +56,9 @@ export async function syncMailbox(userId: string, { retryFailed = false } = {}) 
   try {
     const profile = await gmail().getProfile();
     const conn = await connectionFor(userId, profile.emailAddress);
+    // The Gmail token is still a single env var (one mailbox), so only that mailbox's owner may
+    // sync it. Anyone else would record the owner's bank mail as their own.
+    if (conn.userId !== userId) throw new Error(`mailbox ${profile.emailAddress} belongs to another user`);
     await db.update(syncRuns).set({ mailboxConnectionId: conn.id }).where(eq(syncRuns.id, run!.id));
     const ctx: RunContext = { userId, recorder: ledger.createRecorder() };
 
@@ -84,7 +90,18 @@ export async function syncMailbox(userId: string, { retryFailed = false } = {}) 
     const due = outcomes.filter((o) =>
       o.recorded ? o.recorded.created || !o.alreadyNotified : o.result.status === 'failed' && !o.alreadyNotified,
     );
-    await postToDiscord(due, { onPosted: markNotified });
+    // Categorised lines carry their category's budget this cycle. Uncategorised ones go to
+    // #needs-review, remembered so they can be ticked off once categorised.
+    const standing = await standingFor(userId);
+    for (const o of due) {
+      if (o.recorded && o.result.status === 'parsed') o.standing = standing(o.recorded.categoryId, o.result.transaction.occurredOn);
+    }
+    await postToDiscord(due, {
+      onPosted: markNotified,
+      onReviewMessage: async (o, messageId, content) => {
+        if (o.recorded) await reviewMessages.record(userId, o.recorded.transactionId, messageId, content);
+      },
+    });
 
     // 4. Advance the cursor only once everything above succeeded.
     await db
@@ -96,6 +113,17 @@ export async function syncMailbox(userId: string, { retryFailed = false } = {}) 
   } catch (err) {
     await finishRun(err instanceof Error ? err.message : String(err));
     throw err;
+  }
+}
+
+// A failure here only costs the standing on Discord lines, never the sync.
+async function standingFor(userId: string) {
+  try {
+    const summary = await budget.summary(userId);
+    return (categoryId: string | null, occurredOn: string) => budgetStanding(summary, categoryId, occurredOn);
+  } catch (err) {
+    console.error('budget standing unavailable for Discord lines', err);
+    return () => null;
   }
 }
 
