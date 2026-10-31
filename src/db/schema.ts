@@ -22,6 +22,7 @@ import {
   CATEGORY_KINDS,
   CATEGORY_SOURCES,
   EXPENSE_TYPES,
+  RULE_DIRECTIONS,
   RULE_MATCH_TYPES,
   RULE_ORIGINS,
 } from '@/features/categorisation/types';
@@ -85,6 +86,7 @@ export const expenseType = pgEnum('expense_type', EXPENSE_TYPES);
 export const categorySource = pgEnum('category_source', CATEGORY_SOURCES);
 export const ruleMatchType = pgEnum('rule_match_type', RULE_MATCH_TYPES);
 export const ruleOrigin = pgEnum('rule_origin', RULE_ORIGINS);
+export const ruleDirection = pgEnum('rule_direction', RULE_DIRECTIONS);
 export const transactionKind = pgEnum('transaction_kind', TRANSACTION_KINDS);
 // `apple_pay` arrives in phase 4.
 export const transactionSource = pgEnum('transaction_source', ['gmail']);
@@ -126,10 +128,17 @@ export const categoryRules = pgTable(
       .notNull()
       .references(() => categories.id, { onDelete: 'cascade' }),
     origin: ruleOrigin('origin').notNull(),
+    // Null matches money in and out. Seed rules, and rules learned before directions existed, are null.
+    direction: ruleDirection('direction'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
-  (t) => [unique('category_rules_user_match_pattern_unique').on(t.userId, t.matchType, t.pattern)],
+  // NULLS NOT DISTINCT, so re-seeding a direction-less rule still conflicts instead of duplicating.
+  (t) => [
+    unique('category_rules_user_match_pattern_direction_unique')
+      .on(t.userId, t.matchType, t.pattern, t.direction)
+      .nullsNotDistinct(),
+  ],
 ).enableRLS();
 
 // The ledger. One row per bank transaction; (source, source_ref) is the idempotency key, so a

@@ -63,7 +63,7 @@ export interface TransactionStore {
   setCategory(userId: string, id: string, category: CategoryAssignment): Promise<void>;
   // Skips rows that are no longer uncategorised (never overwrites a rule or manual choice).
   categoriseIfUncategorised(userId: string, ids: string[], category: CategoryAssignment): Promise<number>;
-  listUncategorised(userId: string): Promise<Pick<StoredTransaction, 'id' | 'descriptionNormalised'>[]>;
+  listUncategorised(userId: string): Promise<Pick<StoredTransaction, 'id' | 'descriptionNormalised' | 'amountCents'>[]>;
   // unreviewedOnly: just the rows nobody has suggested a category for yet (suggest_category).
   summariseUncategorised(userId: string, options?: { unreviewedOnly?: boolean }): Promise<UncategorisedGroup[]>;
 }
@@ -71,7 +71,7 @@ export interface TransactionStore {
 export interface CategoryStore {
   listCategories(userId: string): Promise<Category[]>;
   listRules(userId: string): Promise<CategoryRule[]>;
-  // Insert, or re-point an existing rule with the same match type and pattern.
+  // Insert, or re-point an existing rule with the same match type, pattern and direction.
   upsertRule(userId: string, rule: Omit<CategoryRule, 'id'>): Promise<CategoryRule>;
   // Seeding: rows that already exist (by name, or by pattern) are left untouched.
   insertCategoriesIfMissing(userId: string, categories: (CategorySeed & { sortOrder: number })[]): Promise<number>;

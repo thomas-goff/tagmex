@@ -6,14 +6,19 @@ import type { CategoryAssignment, Stores, StoredTransaction } from './ports';
 
 const USER = 'owner';
 
-function row(id: string, descriptionNormalised: string, categorySource: CategorySource = 'none'): StoredTransaction {
+function row(
+  id: string,
+  descriptionNormalised: string,
+  categorySource: CategorySource = 'none',
+  amountCents = -100,
+): StoredTransaction {
   return {
     id,
     descriptionNormalised,
     categorySource,
     categoryId: categorySource === 'none' ? null : 'cat-earlier',
     occurredOn: '2026-11-01',
-    amountCents: -100,
+    amountCents,
     accountLast4: '1234',
   };
 }
@@ -46,7 +51,9 @@ function fakeStores(rows: StoredTransaction[], categories: Category[]) {
         return categories;
       },
       async upsertRule(_userId: string, rule: Omit<CategoryRule, 'id'>) {
-        const existing = rules.find((r) => r.matchType === rule.matchType && r.pattern === rule.pattern);
+        const existing = rules.find(
+          (r) => r.matchType === rule.matchType && r.pattern === rule.pattern && r.direction === rule.direction,
+        );
         if (existing) return Object.assign(existing, rule);
         const created = { id: `rule-${rules.length + 1}`, ...rule };
         rules.push(created);
@@ -73,7 +80,14 @@ describe('correct category', () => {
     assert.equal(rows[0]!.categorySource, 'manual');
     assert.equal(rows[0]!.categoryId, 'cat-groceries');
     assert.deepEqual(rules, [
-      { id: 'rule-1', matchType: 'exact', pattern: 'CORNER SHOP - SUBURB', categoryId: 'cat-groceries', origin: 'learned' },
+      {
+        id: 'rule-1',
+        matchType: 'exact',
+        pattern: 'CORNER SHOP - SUBURB',
+        direction: 'out',
+        categoryId: 'cat-groceries',
+        origin: 'learned',
+      },
     ]);
     assert.equal(result.ruleId, 'rule-1');
   });
@@ -129,6 +143,48 @@ describe('correct category', () => {
     assert.equal(rules.length, 1);
     assert.equal(rules[0]!.categoryId, 'cat-other');
     assert.equal(rows[0]!.categoryId, 'cat-other');
+  });
+
+  test('the learned rule only covers money moving the same way as the corrected transaction', async () => {
+    const savings: Category = { id: 'cat-savings', name: 'Savings', kind: 'expense', isSystem: false };
+    const rows = [
+      row('out-1', 'ABSA BANK SAVINGS', 'none', -200_000),
+      row('out-2', 'ABSA BANK SAVINGS', 'none', -50_000),
+      row('in-1', 'ABSA BANK SAVINGS', 'none', 200_000),
+    ];
+    const { stores, unitOfWork, rules } = fakeStores(rows, [savings]);
+    const corrector = createCategoryCorrector({ stores, unitOfWork });
+    assert.deepEqual(await corrector.findSimilar(USER, 'out-1'), ['out-2']);
+
+    const result = await corrector.correct({ userId: USER, transactionId: 'out-1', categoryId: 'cat-savings' });
+    assert.equal(rules[0]!.direction, 'out');
+    assert.equal(result.appliedTo, 1);
+    assert.deepEqual(
+      rows.map((r) => [r.id, r.categorySource]),
+      [
+        ['out-1', 'manual'],
+        ['out-2', 'user_rule'],
+        ['in-1', 'none'],
+      ],
+    );
+  });
+
+  test('money in and money out with the same description learn separate rules', async () => {
+    const transfer: Category = { id: 'cat-transfer', name: 'Transfer', kind: 'transfer', isSystem: true };
+    const savings: Category = { id: 'cat-savings', name: 'Savings', kind: 'expense', isSystem: false };
+    const rows = [row('out', 'ABSA BANK SAVINGS', 'none', -200_000), row('in', 'ABSA BANK SAVINGS', 'none', 200_000)];
+    const { stores, unitOfWork, rules } = fakeStores(rows, [transfer, savings]);
+    const corrector = createCategoryCorrector({ stores, unitOfWork });
+    await corrector.correct({ userId: USER, transactionId: 'out', categoryId: 'cat-savings' });
+    await corrector.correct({ userId: USER, transactionId: 'in', categoryId: 'cat-transfer' });
+
+    assert.deepEqual(
+      rules.map((r) => [r.direction, r.categoryId]),
+      [
+        ['out', 'cat-savings'],
+        ['in', 'cat-transfer'],
+      ],
+    );
   });
 
   test('rejects an unknown transaction or category', async () => {

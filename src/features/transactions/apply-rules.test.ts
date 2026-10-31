@@ -7,6 +7,7 @@ import type { CategoryAssignment, Stores } from './ports';
 interface Row {
   id: string;
   descriptionNormalised: string;
+  amountCents: number;
   categorySource: CategorySource;
   categoryId: string | null;
   ruleId?: string | null;
@@ -32,12 +33,19 @@ const rule = (id: string, pattern: string, over: Partial<CategoryRule> = {}): Ca
   matchType: 'token',
   categoryId: `cat-${id}`,
   origin: 'seed',
+  direction: null,
   ...over,
 });
 
-const row = (id: string, descriptionNormalised: string, categorySource: CategorySource = 'none'): Row => ({
+const row = (
+  id: string,
+  descriptionNormalised: string,
+  categorySource: CategorySource = 'none',
+  amountCents = -100,
+): Row => ({
   id,
   descriptionNormalised,
+  amountCents,
   categorySource,
   categoryId: categorySource === 'none' ? null : 'cat-earlier',
 });
@@ -71,6 +79,20 @@ describe('applyRulesToUncategorised', () => {
       [
         ['t1', 'merchant_rule', 'eats'],
         ['t2', 'user_rule', 'mine'],
+      ],
+    );
+  });
+
+  test("skips rows moving money the other way from a rule's direction", async () => {
+    const rows = [row('out', 'ABSA BANK SAVINGS', 'none', -200_000), row('in', 'ABSA BANK SAVINGS', 'none', 200_000)];
+    const rules = [rule('savings', 'ABSA BANK SAVINGS', { matchType: 'exact', origin: 'learned', direction: 'out' })];
+    const count = await applyRulesToUncategorised(fakeStores(rows, rules), 'owner');
+    assert.equal(count, 1);
+    assert.deepEqual(
+      rows.map((r) => [r.id, r.categorySource]),
+      [
+        ['out', 'user_rule'],
+        ['in', 'none'],
       ],
     );
   });

@@ -78,6 +78,13 @@
       "when": 1793407464513,
       "tag": "0010_review_suggestions",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793477604064,
+      "tag": "0011_rule_direction",
+      "breakpoints": true
     }
   ]
 }

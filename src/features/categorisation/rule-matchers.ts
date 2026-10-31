@@ -1,4 +1,4 @@
-import type { CategoryRule, RuleMatchType } from './types';
+import type { CategoryRule, RuleDirection, RuleMatchType } from './types';
 
 type Matcher = (pattern: string, description: string) => boolean;
 
@@ -29,6 +29,20 @@ const MATCHERS: Record<RuleMatchType, Matcher> = {
 
 export function ruleMatches(rule: Pick<CategoryRule, 'matchType' | 'pattern'>, description: string) {
   return MATCHERS[rule.matchType](rule.pattern, description);
+}
+
+// The direction a rule learned from this amount gets. Zero moves nothing, so its rule matches either.
+export function directionOf(amountCents: number): RuleDirection | null {
+  if (amountCents === 0) return null;
+  return amountCents < 0 ? 'out' : 'in';
+}
+
+// The description matches and the money moves the rule's way (a direction-less rule allows either).
+export function ruleApplies(
+  rule: Pick<CategoryRule, 'matchType' | 'pattern' | 'direction'>,
+  tx: { descriptionNormalised: string; amountCents: number },
+) {
+  return (rule.direction === null || rule.direction === directionOf(tx.amountCents)) && ruleMatches(rule, tx.descriptionNormalised);
 }
 
 // How specific a pattern is, for picking between several matching rules: more words, then longer.

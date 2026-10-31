@@ -12,11 +12,11 @@ export async function applyRulesToUncategorised(stores: Pick<Stores, 'transactio
   ]);
 
   const matches = new Map<string, { rule: CategoryRule; ids: string[] }>();
-  for (const { id, descriptionNormalised: d } of rows) {
-    const rule = bestMatchingRule(rules, 'exact', d) ?? bestMatchingRule(rules, 'token', d);
+  for (const tx of rows) {
+    const rule = bestMatchingRule(rules, 'exact', tx) ?? bestMatchingRule(rules, 'token', tx);
     if (!rule) continue;
     const match = matches.get(rule.id) ?? { rule, ids: [] };
-    match.ids.push(id);
+    match.ids.push(tx.id);
     matches.set(rule.id, match);
   }
 
