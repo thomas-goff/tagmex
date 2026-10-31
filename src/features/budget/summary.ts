@@ -12,18 +12,33 @@ import type { BudgetLine, LedgerRow } from './types';
 //   discretionary left  = sum of max(allocated - spent, 0) over active dynamic and irregular items
 //   daily allowance     = discretionary left / max(days to salary, 1)
 //   net                 = income - spent
+//   status              = settled: a static item paid in full (spent >= allocated). Paying a debit
+//                         order is the plan working, so it's never "over budget", whatever the
+//                         difference; differenceCents says by how much it was off.
+//                         pending: a static item not paid in full yet.
+//                         on_track / warning / over: dynamic and irregular items under 80%, from
+//                         80%, and from 100% used. unbudgeted: nothing allocated.
 // Transfers (category kind `transfer`) count as neither. Uncategorised rows count as neither too,
 // and are reported separately because they make every other number less accurate.
+
+export type CategoryStatus = 'unbudgeted' | 'settled' | 'pending' | 'on_track' | 'warning' | 'over';
+
+// The share of a dynamic or irregular budget that counts as "warning".
+export const WARNING_PCT = 80;
 
 export interface CategoryLine {
   categoryId: string;
   name: string;
+  emoji: string | null;
   expenseType: ExpenseType;
   allocatedCents: number;
   spentCents: number;
   remainingCents: number;
   // spent / allocated, rounded; null when nothing is allocated.
   usedPct: number | null;
+  status: CategoryStatus;
+  // Settled items: spent - allocated (positive = paid more than budgeted). Zero otherwise.
+  differenceCents: number;
   transactionCount: number;
   isActive: boolean;
 }
@@ -66,7 +81,7 @@ interface Input {
 }
 
 export function summariseCycle({ cycle, status, today, rows, lines }: Input): CycleSummary {
-  const spentBy = new Map<string, { cents: number; count: number; hasOutflow: boolean; name: string | null }>();
+  const spentBy = new Map<string, { cents: number; count: number; hasOutflow: boolean; name: string | null; emoji: string | null }>();
   const uncategorised = { count: 0, outCents: 0, inCents: 0 };
   let incomeCents = 0;
 
@@ -78,7 +93,7 @@ export function summariseCycle({ cycle, status, today, rows, lines }: Input): Cy
     } else if (row.categoryKind === 'income') {
       incomeCents += row.amountCents;
     } else if (row.categoryKind === 'expense') {
-      const entry = spentBy.get(row.categoryId) ?? { cents: 0, count: 0, hasOutflow: false, name: row.categoryName };
+      const entry = spentBy.get(row.categoryId) ?? { cents: 0, count: 0, hasOutflow: false, name: row.categoryName, emoji: row.categoryEmoji };
       entry.cents += -row.amountCents;
       entry.count++;
       entry.hasOutflow ||= row.amountCents < 0;
@@ -89,11 +104,20 @@ export function summariseCycle({ cycle, status, today, rows, lines }: Input): Cy
   const categories: CategoryLine[] = [...lines]
     .sort((a, b) => a.sortOrder - b.sortOrder || a.categoryName.localeCompare(b.categoryName))
     .filter((l) => l.isActive || spentBy.has(l.categoryId))
-    .map((l) => categoryLine(l.categoryId, l.categoryName, l.expenseType, l.allocatedCents, l.isActive, spentBy.get(l.categoryId)));
+    .map((l) =>
+      categoryLine(
+        { categoryId: l.categoryId, name: l.categoryName, emoji: l.categoryEmoji, expenseType: l.expenseType },
+        l.allocatedCents,
+        l.isActive,
+        spentBy.get(l.categoryId),
+      ),
+    );
   // Spending in a category with no budget item (ensureBudgetItems should prevent this) still counts.
   const known = new Set(lines.map((l) => l.categoryId));
   for (const [categoryId, spent] of spentBy) {
-    if (!known.has(categoryId)) categories.push(categoryLine(categoryId, spent.name ?? 'Unknown', 'dynamic', 0, true, spent));
+    if (!known.has(categoryId)) {
+      categories.push(categoryLine({ categoryId, name: spent.name ?? 'Unknown', emoji: spent.emoji, expenseType: 'dynamic' }, 0, true, spent));
+    }
   }
 
   const active = lines.filter((l) => l.isActive);
@@ -140,25 +164,36 @@ export function summariseCycle({ cycle, status, today, rows, lines }: Input): Cy
 }
 
 function categoryLine(
-  categoryId: string,
-  name: string,
-  expenseType: ExpenseType,
+  category: Pick<CategoryLine, 'categoryId' | 'name' | 'emoji' | 'expenseType'>,
   allocatedCents: number,
   isActive: boolean,
   spent: { cents: number; count: number } | undefined,
 ): CategoryLine {
   const spentCents = spent?.cents ?? 0;
+  const status = categoryStatus(category.expenseType, allocatedCents, spentCents);
   return {
-    categoryId,
-    name,
-    expenseType,
+    ...category,
     allocatedCents,
     spentCents,
     remainingCents: allocatedCents - spentCents,
     usedPct: allocatedCents > 0 ? Math.round((spentCents * 100) / allocatedCents) : null,
+    status,
+    differenceCents: status === 'settled' ? spentCents - allocatedCents : 0,
     transactionCount: spent?.count ?? 0,
     isActive,
   };
+}
+
+export function categoryStatus(expenseType: ExpenseType, allocatedCents: number, spentCents: number): CategoryStatus {
+  if (allocatedCents <= 0) return 'unbudgeted';
+  if (expenseType === 'static') return spentCents >= allocatedCents ? 'settled' : 'pending';
+  if (spentCents >= allocatedCents) return 'over';
+  return spentCents * 100 >= allocatedCents * WARNING_PCT ? 'warning' : 'on_track';
+}
+
+// Overspent in the "over budget" sense: settled static items never are.
+export function isOverspent(c: Pick<CategoryLine, 'status' | 'remainingCents'>) {
+  return c.status === 'over' && c.remainingCents < 0;
 }
 
 // The first date in [start, end) whose day of the month is `day` (clamped to short months).

@@ -26,11 +26,13 @@ const row = (occurredOn: string, amountCents: number, categoryId: string | null,
   categoryId,
   categoryKind: categoryId === null ? null : kind,
   categoryName: categoryId,
+  categoryEmoji: null,
 });
 
 const line = (categoryId: string, expenseType: BudgetLine['expenseType'], allocatedCents: number, over: Partial<BudgetLine> = {}): BudgetLine => ({
   categoryId,
   categoryName: categoryId,
+  categoryEmoji: null,
   expenseType,
   allocatedCents,
   expectedDay: null,
@@ -118,6 +120,33 @@ describe('cycle summary', () => {
     assert.equal(dateInCycle({ start: '2027-01-29', end: '2027-02-26' }, 31), '2027-01-31');
     // 28 Jan is before the start and 28 Feb after the end: this cycle has no 28th.
     assert.equal(dateInCycle({ start: '2027-01-29', end: '2027-02-26' }, 28), null);
+  });
+});
+
+describe('category status', () => {
+  const statusOf = (rows: LedgerRow[]) =>
+    Object.fromEntries(summarise(november, '2026-11-05', rows).categories.map((c) => [c.categoryId, [c.status, c.differenceCents]]));
+
+  test('a static item paid in full is settled, whatever it cost; part-paid is pending', () => {
+    assert.deepEqual(statusOf([row('2026-11-01', -2600_00, 'Utilities')]).Utilities, ['settled', 0]);
+    assert.deepEqual(statusOf([row('2026-11-01', -2620_00, 'Utilities')]).Utilities, ['settled', 20_00]);
+    assert.deepEqual(statusOf([row('2026-11-01', -1000_00, 'Utilities')]).Utilities, ['pending', 0]);
+    assert.deepEqual(statusOf([]).Insurance, ['pending', 0]);
+    assert.deepEqual(statusOf([]).Rent, ['unbudgeted', 0]);
+  });
+
+  test('dynamic and irregular items: on track below 80%, warning from 80%, over from 100%', () => {
+    assert.equal(statusOf([row('2026-11-01', -3160_00, 'Groceries')]).Groceries![0], 'on_track');
+    assert.equal(statusOf([row('2026-11-01', -3200_00, 'Groceries')]).Groceries![0], 'warning');
+    assert.equal(statusOf([row('2026-11-01', -4000_00, 'Groceries')]).Groceries![0], 'over');
+    assert.equal(statusOf([row('2026-11-01', -1100_00, 'Clothing')]).Clothing![0], 'over');
+  });
+
+  test('a settled item that cost more is a tip, not overspending', () => {
+    const s = summarise(november, '2026-11-05', [row('2026-11-01', -2620_00, 'Utilities')]);
+    const codes = deriveTips({ current: s, previous: null }).map((t) => t.code);
+    assert.ok(codes.includes('static_above_budget'));
+    assert.ok(!codes.includes('overspent'));
   });
 });
 

@@ -1,6 +1,8 @@
 import 'server-only';
 import { postMessage, type DiscordChannel } from '@/features/notifications/discord';
-import { channelFor, emailLine, summaryMessage, type NotifiableEmail } from './format';
+import type { DiscordPayload } from '@/features/notifications/embeds';
+import { backlogPayload, emailPayload } from './email-payload';
+import { channelFor, type NotifiableEmail } from './format';
 
 // Above this many, a channel gets one summary instead of a message per email.
 const SUMMARY_THRESHOLD = 8;
@@ -14,8 +16,8 @@ interface Options<T> {
   channel?: DiscordChannel;
   // After every successful post, with what it covered, so the caller records what reached Discord.
   onPosted?: (posted: T[]) => Promise<void>;
-  // A #needs-review message posted for one item: its id, to edit later.
-  onReviewMessage?: (item: T, messageId: string, content: string) => Promise<void>;
+  // A #needs-review message posted for one item: its id and what was posted, to edit later.
+  onReviewMessage?: (item: T, messageId: string, payload: DiscordPayload) => Promise<void>;
 }
 
 export async function postToDiscord<T extends NotifiableEmail>(
@@ -31,24 +33,24 @@ export async function postToDiscord<T extends NotifiableEmail>(
   for (const [target, group] of groups) {
     if (target === 'review' && !channel) {
       for (const item of group.slice(0, REVIEW_LIMIT)) {
-        const content = prefix + emailLine(item);
-        const messageId = await postMessage('review', content);
+        const payload = emailPayload(item, prefix);
+        const messageId = await postMessage('review', payload);
         // Marked as posted first: if remembering the message fails, it isn't posted again; it just
         // won't be ticked off later.
         await onPosted([item]);
-        await onReviewMessage?.(item, messageId, content).catch((err) => console.error('recording a #needs-review message failed', err));
+        await onReviewMessage?.(item, messageId, payload).catch((err) => console.error('recording a #needs-review message failed', err));
       }
       const rest = group.slice(REVIEW_LIMIT);
       if (rest.length > 0) {
-        await postMessage('review', `${prefix}${summaryMessage(rest)}\nAsk Claude for get_uncategorised to sort these out.`);
+        await postMessage('review', backlogPayload(rest, prefix, 'Ask Claude for get_uncategorised to sort these out, sir.'));
         await onPosted(rest);
       }
     } else if (group.length > SUMMARY_THRESHOLD) {
-      await postMessage(target, prefix + summaryMessage(group));
+      await postMessage(target, backlogPayload(group, prefix));
       await onPosted(group);
     } else {
       for (const item of group) {
-        await postMessage(target, prefix + emailLine(item));
+        await postMessage(target, emailPayload(item, prefix));
         await onPosted([item]);
       }
     }

@@ -6,6 +6,7 @@ import type { TransactionView } from '@/features/budget/repo';
 import { summariseCycle } from '@/features/budget/summary';
 import type { BudgetService } from '@/features/budget/service';
 import { cycleContaining, cycleStatus } from '@/features/cycle/cycle';
+import { payloadText } from '@/features/notifications/embeds';
 import { frontendApiUrl } from './clerk-keys';
 import { parseAmount, untrusted } from './format';
 import { createMcpEndpoint, protectedResourceMetadata, resourceMetadataUrl } from './server';
@@ -24,8 +25,8 @@ function fakeDeps(over: Partial<ToolDeps> = {}) {
     cycle,
     status: cycleStatus(cycle, '2026-11-05', true),
     today: '2026-11-05',
-    rows: [{ id: 't1', occurredOn: '2026-11-01', amountCents: -450_00, categoryId: 'g', categoryKind: 'expense', categoryName: 'Groceries' }],
-    lines: [{ categoryId: 'g', categoryName: 'Groceries', expenseType: 'dynamic', allocatedCents: 4000_00, expectedDay: null, isActive: true, sortOrder: 0 }],
+    rows: [{ id: 't1', occurredOn: '2026-11-01', amountCents: -450_00, categoryId: 'g', categoryKind: 'expense', categoryName: 'Groceries', categoryEmoji: '🛒' }],
+    lines: [{ categoryId: 'g', categoryName: 'Groceries', categoryEmoji: '🛒', expenseType: 'dynamic', allocatedCents: 4000_00, expectedDay: null, isActive: true, sortOrder: 0 }],
   });
   const budget = {
     async overview(userId: string) {
@@ -160,7 +161,10 @@ describe('MCP tools', () => {
           return ids.length;
         },
       },
-      repo: { findTransaction: async () => ({ id, isDeleted: false, description: 'CORNER SHOP', occurredOn: '2026-11-01', amountCents: -100 }) } as never,
+      repo: {
+        findTransaction: async () => ({ id, isDeleted: false, description: 'CORNER SHOP', occurredOn: '2026-11-01', amountCents: -100 }),
+        listCategories: async () => [{ id: 'g', name: 'Groceries', emoji: '🛒' }],
+      } as never,
       ledger: {
         stores: { categories: { listCategories: async () => [{ id: 'g', name: 'Groceries', kind: 'expense', isSystem: false }] } },
         corrector: {
@@ -180,7 +184,7 @@ describe('MCP tools', () => {
     assert.equal((confirmed.structuredContent as { changed: number }).changed, BULK_CONFIRM_THRESHOLD + 2);
     assert.equal(corrected, 1);
     // The transaction and everything the rule fixed are ticked off in #needs-review.
-    assert.deepEqual(resolved, [['🏷️ Groceries', id, ...similar]]);
+    assert.deepEqual(resolved, [['🛒 Groceries', id, ...similar]]);
   });
 
   test('rate limited after too many calls in a minute', async () => {
@@ -268,7 +272,7 @@ function fakeAccountLedger() {
 }
 
 function txView(t: Pick<TransactionView, 'id' | 'description' | 'accountType' | 'accountLast4'>): TransactionView {
-  return { occurredOn: '2026-11-01', amountCents: -500_00, categoryId: null, categoryName: null, categorySource: 'none', kind: 'debit', reserved: false, isDeleted: false, ...t };
+  return { occurredOn: '2026-11-01', amountCents: -500_00, categoryId: null, categoryName: null, categoryEmoji: null, categorySource: 'none', kind: 'debit', reserved: false, isDeleted: false, ...t };
 }
 
 const readTool = (name: string) => READ_TOOLS.find((t) => t.name === name)!;
@@ -354,7 +358,8 @@ describe('post_status_to_discord', () => {
     const posts: [string, string][] = [];
     const { deps, audit } = fakeDeps({
       discord: {
-        async post(channel, content) {
+        async post(channel, payload) {
+          const content = payloadText(payload);
           posts.push([channel, content]);
           return post(channel, content);
         },
@@ -370,13 +375,13 @@ describe('post_status_to_discord', () => {
     assert.equal(posts.length, 1);
     const [channel, content] = posts[0]!;
     assert.equal(channel, 'budget');
-    assert.match(content, /^🤖 \*\*From Claude\*\*\nSorted 12 transactions \.\n\nAll caught up\.\n\n☀️ \*\*Budget/);
-    assert.match(content, /25 days to salary/);
+    assert.match(content, /^🤖 \*\*From Claude\*\*\nSorted 12 transactions \.\n\nAll caught up\.\n.*\n📊 Budget status, Master Goff/);
+    assert.match(content, /Salary arrives in \*\*25 days\*\*/);
     assert.equal((res.structuredContent as { message_id: string }).message_id, 'msg_1');
 
     const noteOnly = await runTool(tool('post_status_to_discord'), { note: 'Rent is paid.', include_budget: false }, { principal, deps });
     assert.equal(noteOnly.isError, undefined);
-    assert.equal(posts[1]![1], '🤖 **From Claude**\nRent is paid.');
+    assert.match(posts[1]![1], /^🤖 \*\*From Claude\*\*\nRent is paid\.\n[^\n]*Relayed on request$/);
   });
 
   test('nothing to post, the hourly cap, and a failing webhook are isError results that post nothing', async () => {

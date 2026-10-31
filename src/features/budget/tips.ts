@@ -1,6 +1,6 @@
 import { formatRand } from '@/features/sync/format';
 import { centsToDecimal } from '@/features/transactions/money';
-import type { CycleSummary } from './summary';
+import { isOverspent, type CycleSummary } from './summary';
 import { onPaceCents } from './trend';
 
 // Observations about the current cycle, most urgent first. Each has a stable `code` so Discord and
@@ -13,6 +13,7 @@ export type TipCode =
   | 'uncategorised'
   | 'budgets_not_set'
   | 'overspent'
+  | 'static_above_budget'
   | 'on_pace_to_overspend'
   | 'late_debit_orders'
   | 'unbudgeted_spending'
@@ -66,13 +67,22 @@ export function deriveTips({ current, previous }: { current: CycleSummary; previ
     });
   }
 
-  const overspent = current.categories.filter((c) => c.allocatedCents > 0 && c.remainingCents < 0);
-  for (const c of overspent) {
+  for (const c of current.categories.filter(isOverspent)) {
     tips.push({
       code: 'overspent',
       severity: 'warning',
       message: `${c.name} is ${formatRand(-c.remainingCents)} over its ${formatRand(c.allocatedCents)} budget.`,
       data: { category_id: c.categoryId, category: c.name, over_by: rand(-c.remainingCents), allocated: rand(c.allocatedCents) },
+    });
+  }
+
+  // A settled debit order that cost more than budgeted isn't overspending, but the budget is stale.
+  for (const c of current.categories.filter((c) => c.status === 'settled' && c.differenceCents > 0)) {
+    tips.push({
+      code: 'static_above_budget',
+      severity: 'info',
+      message: `${c.name} is settled at ${formatRand(c.spentCents)}, ${formatRand(c.differenceCents)} more than its ${formatRand(c.allocatedCents)} budget. Update the budget if that's the new amount.`,
+      data: { category_id: c.categoryId, category: c.name, paid: rand(c.spentCents), allocated: rand(c.allocatedCents), difference: rand(c.differenceCents) },
     });
   }
 

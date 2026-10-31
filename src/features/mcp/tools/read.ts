@@ -53,7 +53,7 @@ function overviewText(s: CycleSummary, tips: Tip[]) {
   if (spending.length > 0) {
     lines.push(
       `By category: ${spending
-        .map((c) => `${c.name} ${rand(c.spentCents)}${c.allocatedCents > 0 ? ` of ${rand(c.allocatedCents)}` : ''}`)
+        .map((c) => `${c.name} ${rand(c.spentCents)}${c.allocatedCents > 0 ? ` of ${rand(c.allocatedCents)}` : ''}${c.status === 'settled' ? ' (settled)' : c.status === 'over' ? ' (over)' : ''}`)
         .join(' · ')}`,
     );
   }
@@ -68,7 +68,7 @@ const getBudgetOverview = defineTool({
     'The one-call answer to "where do I stand?", "how much can I spend?" or "how is this month going?".',
     'Returns the cycle and days to next salary; income, spent and net; each expense category with allocated, spent and remaining; pending debit orders; discretionary money left and a daily allowance until payday; the uncategorised count; and the top tips.',
     CYCLE_NOTE,
-    'Definitions: spent = money out minus refunds in that category this cycle. remaining = allocated - spent (negative = overspent). A pending debit order is a static (fixed) budget item with no money out in its category yet this cycle. Discretionary left = the unspent part of dynamic and irregular budgets; static items are committed, not discretionary. Daily allowance = discretionary left / days to salary. Transfers between own accounts count as neither income nor spending. Uncategorised transactions are excluded from every figure, so mention them when there are any.',
+    'Definitions: spent = money out minus refunds in that category this cycle. remaining = allocated - spent (negative = overspent). status: settled = a static item paid in full (never over budget, even if it cost more; difference says by how much), pending = a static item not paid in full yet, on_track / warning (from 80%) / over (from 100%) for dynamic and irregular items, unbudgeted = nothing allocated. A pending debit order is a static (fixed) budget item with no money out in its category yet this cycle. Discretionary left = the unspent part of dynamic and irregular budgets; static items are committed, not discretionary. Daily allowance = discretionary left / days to salary. Transfers between own accounts count as neither income nor spending. Uncategorised transactions are excluded from every figure, so mention them when there are any.',
     MONEY_NOTE,
   ].join(' '),
   input: z.object({ cycle_id: cycleIdInput }),
@@ -265,11 +265,12 @@ const listCategories = defineTool({
     await deps.repo.ensureBudgetItems(principal.userId);
     const categories = await deps.repo.listCategories(principal.userId);
     return {
-      text: categories.map((c) => `${c.name} (${c.kind}${c.isSalary ? ', salary' : ''}${c.isSystem ? ', system' : ''})`).join(', '),
+      text: categories.map((c) => `${c.emoji ? `${c.emoji} ` : ''}${c.name} (${c.kind}${c.isSalary ? ', salary' : ''}${c.isSystem ? ', system' : ''})`).join(', '),
       data: {
         categories: categories.map((c) => ({
           category_id: c.id,
           name: c.name,
+          emoji: c.emoji,
           kind: c.kind,
           is_salary: c.isSalary,
           is_system: c.isSystem,
@@ -422,7 +423,7 @@ const getTips = defineTool({
   name: 'get_tips',
   title: 'Budget tips',
   description:
-    'Every observation about the current cycle, most urgent first: salary overdue, uncategorised transactions, overspent or on-pace-to-overspend categories, late debit orders, unbudgeted spending, last cycle\'s savings rate and spending vs last cycle. Each has a stable code and severity (critical, warning, info). get_budget_overview already includes the top three.',
+    'Every observation about the current cycle, most urgent first: salary overdue, uncategorised transactions, overspent or on-pace-to-overspend categories, settled debit orders that cost more than budgeted, late debit orders, unbudgeted spending, last cycle\'s savings rate and spending vs last cycle. Each has a stable code and severity (critical, warning, info). get_budget_overview already includes the top three.',
   input: z.object({}),
   annotations: { ...readOnly, title: 'Budget tips' },
   async run(_args, { principal, deps }) {

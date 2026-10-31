@@ -1,13 +1,7 @@
-import Link from "next/link";
+import { auth } from "@clerk/nextjs/server";
+import { redirect } from "next/navigation";
 
-export default function Home() {
-  return (
-    <main>
-      <h1>tagmex</h1>
-      <p>A personal budgeting tool that reads bank notification emails.</p>
-      <p>
-        <Link href="/privacy">Privacy policy</Link> · <Link href="/terms">Terms of service</Link>
-      </p>
-    </main>
-  );
+// No landing page: signed in goes to the dashboard, signed out to sign-in.
+export default async function Home() {
+  redirect((await auth()).userId ? "/dashboard" : "/sign-in");
 }

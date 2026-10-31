@@ -28,6 +28,7 @@ export class ConflictError extends Error {
 export interface CategoryInfo {
   id: string;
   name: string;
+  emoji: string | null;
   kind: CategoryKind;
   isSystem: boolean;
   isSalary: boolean;
@@ -41,6 +42,7 @@ export interface TransactionView {
   description: string;
   categoryId: string | null;
   categoryName: string | null;
+  categoryEmoji: string | null;
   categorySource: CategorySource;
   kind: string;
   accountType: string;
@@ -128,6 +130,7 @@ export function createBudgetRepo(db: Database) {
           categoryId: transactions.categoryId,
           categoryKind: categories.kind,
           categoryName: categories.name,
+          categoryEmoji: categories.emoji,
         })
         .from(transactions)
         .leftJoin(categories, eq(categories.id, transactions.categoryId))
@@ -159,6 +162,7 @@ export function createBudgetRepo(db: Database) {
         .select({
           categoryId: budgetItems.categoryId,
           categoryName: categories.name,
+          categoryEmoji: categories.emoji,
           expenseType: budgetItems.expenseType,
           allocated: budgetItems.allocated,
           expectedDay: budgetItems.expectedDay,
@@ -195,6 +199,7 @@ export function createBudgetRepo(db: Database) {
         .select({
           id: categories.id,
           name: categories.name,
+          emoji: categories.emoji,
           kind: categories.kind,
           isSystem: categories.isSystem,
           isSalary: categories.isSalary,
@@ -206,18 +211,38 @@ export function createBudgetRepo(db: Database) {
         .orderBy(asc(categories.kind), asc(categories.sortOrder), asc(categories.name));
     },
 
-    async createCategory(userId: string, c: { name: string; kind: 'expense' | 'income'; expenseType: ExpenseType | null }) {
+    async createCategory(
+      userId: string,
+      c: { name: string; kind: 'expense' | 'income'; expenseType: ExpenseType | null; emoji?: string | null },
+    ) {
       const [{ next } = { next: 0 }] = await db
         .select({ next: sql<number>`coalesce(max(${categories.sortOrder}), -1)::int + 1` })
         .from(categories)
         .where(eq(categories.userId, userId));
       const [row] = await db
         .insert(categories)
-        .values({ userId, name: c.name, kind: c.kind, expenseType: c.kind === 'expense' ? c.expenseType : null, sortOrder: next })
+        .values({
+          userId,
+          name: c.name,
+          emoji: c.emoji ?? null,
+          kind: c.kind,
+          expenseType: c.kind === 'expense' ? c.expenseType : null,
+          sortOrder: next,
+        })
         .onConflictDoNothing()
         .returning({ id: categories.id });
       if (!row) throw new ConflictError(`a category called "${c.name}" already exists`);
       return row.id;
+    },
+
+    // Null clears it (back to 🏷️). Returns false when the category doesn't exist for this user.
+    async setCategoryEmoji(userId: string, categoryId: string, emoji: string | null) {
+      const updated = await db
+        .update(categories)
+        .set({ emoji })
+        .where(and(eq(categories.userId, userId), eq(categories.id, categoryId)))
+        .returning({ id: categories.id });
+      return updated.length > 0;
     },
 
     async listTransactions(userId: string, filter: TransactionFilter, limit: number, after: TransactionCursor | null) {
@@ -345,6 +370,7 @@ const transactionViewColumns = {
   description: transactions.descriptionNormalised,
   categoryId: transactions.categoryId,
   categoryName: categories.name,
+  categoryEmoji: categories.emoji,
   categorySource: transactions.categorySource,
   kind: transactions.kind,
   accountType: transactions.accountType,

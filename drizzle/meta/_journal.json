@@ -64,6 +64,13 @@
       "when": 1793402776607,
       "tag": "0008_account_labels",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793404174754,
+      "tag": "0009_category_emoji",
+      "breakpoints": true
     }
   ]
 }

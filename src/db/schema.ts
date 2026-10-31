@@ -97,6 +97,8 @@ export const categories = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     userId: text('user_id').notNull(),
     name: text('name').notNull(),
+    // Shown beside the name on Discord and the dashboard. Null falls back to 🏷️.
+    emoji: text('emoji'),
     kind: categoryKind('kind').notNull(),
     // Expense categories only. Superseded by budget_items.expense_type: only read to seed a new item.
     expenseType: expenseType('expense_type'),

@@ -10,12 +10,14 @@ export interface LedgerRow {
   categoryId: string | null;
   categoryKind: CategoryKind | null;
   categoryName: string | null;
+  categoryEmoji: string | null;
 }
 
 // A budget item joined with its category.
 export interface BudgetLine {
   categoryId: string;
   categoryName: string;
+  categoryEmoji: string | null;
   expenseType: ExpenseType;
   // Per cycle, >= 0.
   allocatedCents: number;
