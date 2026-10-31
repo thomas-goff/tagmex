@@ -13,7 +13,7 @@ npm test        # unit tests (node:test via tsx)
 | Var | |
 |---|---|
 | `DATABASE_URL` | Supabase transaction pooler |
-| `MIGRATION_DATABASE_URL` | Supabase session pooler (drizzle-kit only) |
+| `MIGRATION_DATABASE_URL` | Supabase session pooler (migrations only: `npm run db:migrate`, and production builds). In Vercel, **Production scope only** |
 | `CRON_SECRET` | 32+ chars, also in Supabase Vault as `cron_secret` |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google Cloud "Desktop app" OAuth client |
 | `GMAIL_REFRESH_TOKEN` | from `npm run gmail:auth` |
@@ -24,6 +24,38 @@ npm test        # unit tests (node:test via tsx)
 | `DISCORD_BUDGET_WEBHOOK_URL` | optional, **#budget** |
 | `DISCORD_SYSTEM_WEBHOOK_URL` | optional, **#system** |
 | `DISCORD_PING_USER_ID` | optional, your Discord user id: @-mentioned on critical #system messages only |
+
+## Deploys and migrations
+
+Merging to `main` deploys to production, and the production build applies any new `drizzle/`
+migrations itself. `npm run build` (pinned as Vercel's build command in `vercel.json`) is
+`next build`, then `npm run db:migrate:deploy` (`scripts/migrate-on-deploy.ts`):
+
+| Build | What it does with the database |
+|---|---|
+| **Production** (`VERCEL_ENV=production`) | After `next build` succeeds, applies pending migrations to `MIGRATION_DATABASE_URL`, then checks every migration in `drizzle/meta/_journal.json` is recorded. Any failure fails the build, so the deploy never goes live and the previous one keeps serving. If `MIGRATION_DATABASE_URL` isn't set, that's a failure too. |
+| **Preview** (any branch or PR) | Nothing. It never connects, even if a URL is set (it warns if `MIGRATION_DATABASE_URL` is set for Preview). |
+| **Local** `npm run build` | Nothing (`VERCEL_ENV` is unset). |
+
+In Vercel → Settings → Environment Variables, set `MIGRATION_DATABASE_URL` for **Production**
+only. The build log shows `Migrations: applied …`, `Migrations: up to date` or `Migrations: skipped`.
+
+Things to know:
+
+- **Migrations must work with the code already running.** The old deployment serves traffic while
+  the new one builds, and Instant Rollback doesn't rebuild or undo migrations. So add tables and
+  nullable columns first; drop or rename in a later PR once nothing reads the old shape.
+- **A failed deploy can still have migrated.** Migrations run last, after `next build`, so a
+  compile error never touches the database. If Vercel fails after that (rare), the migration stays
+  applied. That's fine if it's additive (above): redeploy, and the build finds nothing to do.
+- **Out-of-order migrations fail the deploy.** drizzle only applies migrations newer than the
+  latest applied one. If a branch's migration was generated before another landed on `main`,
+  drizzle would skip it silently, so the build fails and names it. Delete it and run
+  `npm run db:generate` again on top of `main`.
+- **Concurrent production builds** queue on a Postgres advisory lock, and DDL that waits more than
+  10s for a lock fails the build rather than stalling production queries.
+- `npm run db:migrate` still works by hand, e.g. to migrate before merging. The build then finds
+  nothing to do.
 
 ## Gmail sync (phase 1)
 
