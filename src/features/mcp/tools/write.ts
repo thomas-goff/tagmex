@@ -376,8 +376,8 @@ const postStatusToDiscord = defineTool({
 
     const embeds: DiscordEmbed[] = note ? [claudeNoteEmbed(note)] : [];
     if (args.include_budget) {
-      const { summary, tips } = await deps.budget.overview(userId);
-      embeds.push(...(digestPayload(summary, tips, `📊 Budget status, ${MASTER}`).embeds ?? []));
+      const { summary, previous, tips } = await deps.budget.overview(userId);
+      embeds.push(...(digestPayload(summary, tips, { title: `📊 Budget status, ${MASTER}`, previous }).embeds ?? []));
     }
     const payload = { content: '🤖 **From Claude**', embeds };
     const content = payloadText(payload);

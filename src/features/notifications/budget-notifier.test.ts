@@ -236,4 +236,19 @@ describe('budget messages', () => {
     assert.match(text, /✅ Settled: 🛡️ Insurance/);
     assert.doesNotMatch(text, /Debit orders to come/);
   });
+
+  test("digest sums up yesterday's money out", () => {
+    const groceries = (id: string, occurredOn: string, amountCents: number): LedgerRow => ({ id, occurredOn, amountCents, categoryId: 'g', categoryKind: 'expense', categoryName: 'Groceries', categoryEmoji: '🛒' });
+    const busy = summaryOn('2026-11-10', [groceries('a', '2026-11-09', -150_00), groceries('b', '2026-11-09', -100_00), groceries('c', '2026-11-08', -40_00)]);
+    assert.match(payloadText(digestPayload(busy, [])), /🧾 Yesterday \(Mon 9 Nov\): R250\.00 out across 2 transactions/);
+    assert.match(payloadText(digestPayload(summaryOn('2026-11-10', []), [])), /🧾 Yesterday \(Mon 9 Nov\): Nothing went out, sir\./);
+
+    // Payday morning: yesterday is in the cycle that just ended.
+    const today = '2026-10-30';
+    const fresh = summaryOn(today, []);
+    const prior = previousCycle(fresh.cycle, starts, 31);
+    const previous = summariseCycle({ cycle: prior, status: cycleStatus(prior, today, false), today, rows: [groceries('d', '2026-10-29', -60_00)], lines });
+    assert.equal(fresh.yesterday, null);
+    assert.match(payloadText(digestPayload(fresh, [], { previous })), /🧾 Yesterday \(Thu 29 Oct\): R60\.00 out across 1 transaction\b/);
+  });
 });
