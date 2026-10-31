@@ -114,7 +114,7 @@ function transactionStore(db: Database): TransactionStore {
         .where(and(live(userId), uncategorised));
     },
 
-    async summariseUncategorised(userId) {
+    async summariseUncategorised(userId, { unreviewedOnly = false } = {}) {
       const count = sql<number>`count(*)::int`;
       const rows = await db
         .select({
@@ -126,7 +126,7 @@ function transactionStore(db: Database): TransactionStore {
           accounts: sql<UncategorisedGroup['accounts']>`jsonb_agg(distinct jsonb_build_object('accountType', ${transactions.accountType}, 'accountLast4', ${transactions.accountLast4}))`,
         })
         .from(transactions)
-        .where(and(live(userId), uncategorised))
+        .where(and(live(userId), uncategorised, unreviewedOnly ? isNull(transactions.suggestedAt) : undefined))
         .groupBy(transactions.descriptionNormalised)
         .orderBy(desc(count), asc(transactions.descriptionNormalised));
       return rows.map(({ total, ...r }) => ({ ...r, totalCents: decimalToCents(total) }));

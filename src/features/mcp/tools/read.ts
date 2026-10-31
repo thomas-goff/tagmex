@@ -215,12 +215,18 @@ const getUncategorised = defineTool({
     UNTRUSTED_NOTE,
     ACCOUNT_NOTE,
   ].join(' '),
-  input: z.object({ limit: z.number().int().min(1).max(MAX_PAGE).default(15).describe('Groups to return.') }),
+  input: z.object({
+    limit: z.number().int().min(1).max(MAX_PAGE).default(15).describe('Groups to return.'),
+    unreviewed_only: z
+      .boolean()
+      .default(false)
+      .describe('Only transactions nobody has called suggest_category on yet, so a regular pass looks at each transaction once.'),
+  }),
   annotations: { ...readOnly, title: 'Uncategorised transactions' },
-  async run({ limit }, { principal, deps }) {
+  async run({ limit, unreviewed_only }, { principal, deps }) {
     const userId = principal.userId;
     const [groups, known, categories, labels] = await Promise.all([
-      deps.ledger.stores.transactions.summariseUncategorised(userId),
+      deps.ledger.stores.transactions.summariseUncategorised(userId, { unreviewedOnly: unreviewed_only }),
       deps.repo.listKnownDescriptions(userId),
       deps.ledger.stores.categories.listCategories(userId),
       deps.accounts.listLabels(userId).then(createLabeller),
@@ -245,7 +251,9 @@ const getUncategorised = defineTool({
     return {
       text:
         total === 0
-          ? 'Nothing is uncategorised.'
+          ? unreviewed_only
+            ? 'Nothing new to look at: every uncategorised transaction already has a suggestion.'
+            : 'Nothing is uncategorised.'
           : `${total} uncategorised transactions in ${groups.length} groups${groups.length > limit ? ` (showing ${limit})` : ''}:\n${shown
               .map((g, i) => `${g.count}× ${g.description}${g.counterparty ? ` (${g.counterparty.label})` : ''} ${rand(groups[i]!.totalCents)} on ${g.accounts.map((a) => a.account_label ?? a.account).join(', ')} (latest ${g.last_date}, id ${g.transaction_id})${g.suggested_category?.category ? ` — maybe ${g.suggested_category.category}?` : ''}`)
               .join('\n')}`,

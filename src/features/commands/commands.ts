@@ -20,6 +20,7 @@ export type CommandErrorCode =
   | 'unknown_category'
   | 'unknown_transaction'
   | 'excluded'
+  | 'already_categorised'
   | 'not_expense'
   | 'income_budget'
   | 'nothing_to_change'
@@ -49,10 +50,11 @@ export interface CommandDeps {
     | 'updateSettings'
     | 'getSettings'
     | 'setExcluded'
+    | 'setSuggestion'
   >;
   ledger: { stores: Pick<Stores, 'categories'>; corrector: Pick<CategoryCorrector, 'findSimilar' | 'correct'> };
-  // #needs-review messages to tick off when their transactions are sorted.
-  review: Pick<ReviewMessages, 'resolve'>;
+  // #needs-review messages to tick off when their transactions are sorted, or to show a suggestion.
+  review: Pick<ReviewMessages, 'resolve' | 'suggest'>;
 }
 
 export type Commands = ReturnType<typeof createCommands>;
@@ -91,6 +93,26 @@ export function createCommands(deps: CommandDeps) {
       const result = await deps.ledger.corrector.correct({ userId, transactionId: tx.id, categoryId: target.id, applyToSimilar: input.applyToSimilar });
       await deps.review.resolve(userId, [tx.id, ...similar], categoryTag(target.name, await emojiOf(userId, target.id)));
       return { status: 'done' as const, tx, category: target, appliedTo: result.appliedTo, ruleId: result.ruleId };
+    },
+
+    // Records a suggested category (null = looked at, not sure) and shows it on #needs-review with
+    // an Accept button. Never categorises: the user decides. With applyToSimilar, the other
+    // uncategorised transactions with the same description get it too. Either way they count as
+    // looked at, so the next pass skips them.
+    async suggest(userId: string, input: { transactionId: string; category: string | null; note: string | null; applyToSimilar: boolean }) {
+      const tx = await transaction(userId, input.transactionId);
+      if (tx.isDeleted) throw new CommandError('excluded', 'That transaction is excluded. Restore it first.');
+      if (tx.categorySource !== 'none') {
+        throw new CommandError('already_categorised', `That transaction is already categorised as ${tx.categoryName ?? 'something'}.`);
+      }
+      const target = input.category === null ? null : await category(userId, input.category);
+
+      const similar = input.applyToSimilar ? await deps.ledger.corrector.findSimilar(userId, tx.id) : [];
+      const ids = await deps.repo.setSuggestion(userId, [tx.id, ...similar], { categoryId: target?.id ?? null, note: input.note });
+      const categories = await deps.repo.listCategories(userId);
+      const shown = target ? (categories.find((c) => c.id === target.id) ?? { ...target, emoji: null }) : null;
+      await deps.review.suggest(userId, ids, { category: shown, note: input.note }, categories);
+      return { tx, category: target, suggested: ids.length };
     },
 
     // An expense category gets a budget item at R0, or at allocatedCents.

@@ -25,6 +25,7 @@ npm test        # unit tests (node:test via tsx)
 | `DISCORD_SYSTEM_WEBHOOK_URL` | optional, **#system** |
 | `DISCORD_PING_USER_ID` | optional, your Discord user id: @-mentioned on critical #system messages only |
 | `DISCORD_AVATAR_URL` | optional, a public image URL: Pennyworth's avatar on every post (unset = each webhook's own) |
+| `DISCORD_PUBLIC_KEY` | optional, the Discord application's public key: turns on the [#needs-review buttons](#needs-review-buttons) |
 
 ## Deploys and migrations
 
@@ -226,7 +227,7 @@ Pennyworth, a butler who keeps Master Goff's books. The same numbers are on the 
 | Channel | What | Webhook |
 |---|---|---|
 | #transactions | Each categorised transaction: amount, merchant, category, its budget bar (or ✅ Settled) and days to payday | `DISCORD_WEBHOOK_URL` |
-| #needs-review | Each uncategorised transaction. Ticked ✅ with its category when you categorise it through Claude | `DISCORD_REVIEW_WEBHOOK_URL` |
+| #needs-review | Each uncategorised transaction, with a category dropdown and Exclude (once [buttons](#needs-review-buttons) are set up). Shows Claude's suggestion with an Accept button; ticked ✅ with its category once it's sorted, however it's sorted | `DISCORD_REVIEW_WEBHOOK_URL` |
 | #budget | Daily digest from 07:00 SAST, 80% / 100% category alerts, salary landed + last cycle recap, salary overdue | `DISCORD_BUDGET_WEBHOOK_URL` |
 | #system | Parse failures, sync / Gmail token failures (once a day per error, with a ping), no successful sync for 2h (ping), heartbeat, dry runs | `DISCORD_SYSTEM_WEBHOOK_URL` |
 
@@ -236,6 +237,39 @@ going live: a message can only be edited through the webhook that posted it, so 
 posted while it fell back won't get ticked off. Set notification levels per channel in
 Discord (e.g. #system on "@mentions only", so only the pings reach you). Every digest and alert is
 deduplicated in `notifications_sent`, so retries never repeat one.
+
+### #needs-review buttons
+
+Each review message gets a dropdown of categories, **Exclude**, and, once Claude has suggested a
+category (`suggest_category`), an **Accept** button. Picking or accepting categorises it exactly
+like `categorise_transaction`: it learns a rule, fixes the other uncategorised transactions with
+that description, and asks first (a reply only you see) when that's more than 25. Only
+`DISCORD_PING_USER_ID` can use them. A nightly Claude routine calls
+`get_uncategorised` with `unreviewed_only: true` and `suggest_category` for each group, so it
+looks at each transaction once (`transactions.suggested_at`) and never categorises by itself.
+
+Plain channel webhooks can't carry working buttons, so this needs a Discord application. Until
+`DISCORD_PUBLIC_KEY` is set nothing changes: no controls are sent and
+`/api/discord/interactions` is a 404. Once:
+
+1. [Developer Portal](https://discord.com/developers/applications) → *New Application*. Copy
+   *General Information → Public Key*.
+2. *Bot* → *Reset Token*, copy it (only needed for step 3). *Installation* → *Guild Install*
+   with the `bot` scope and *Manage Webhooks*; open the install link and add it to your server.
+3. Create the webhook the app owns (Developer Mode → right-click #needs-review → *Copy Channel ID*),
+   and set the URL it prints as `DISCORD_REVIEW_WEBHOOK_URL` in Vercel.
+
+   ```bash
+   DISCORD_BOT_TOKEN=... npm run discord:review-webhook -- --channel <channel id>
+   ```
+
+4. Set `DISCORD_PUBLIC_KEY` in Vercel, and redeploy. (After step 3, never before: controls sent
+   through a plain webhook don't work.)
+5. *General Information → Interactions Endpoint URL*: `https://<your-app>/api/discord/interactions`.
+   Discord checks it with a signed PING when you save; it saves only if the endpoint answers.
+
+Review messages posted through the old webhook can't be edited by the new one, so sort those
+before switching (`get_uncategorised` empty), or they stay un-ticked.
 
 ### Rollout (once)
 
@@ -288,7 +322,8 @@ change: run `npm run users:allow -- --email you@example.com --unlink` and sign i
 Read: `get_budget_overview` (start here), `list_transactions`, `get_uncategorised`,
 `list_categories`, `list_accounts`, `get_budget_items`, `get_pending_debit_orders`,
 `get_spending_trend`, `get_tips`, `get_sync_status`. Write: `categorise_transaction` (learns a rule;
-over 25 similar rows needs `confirm: true`), `create_category`, `set_category_emoji`, `set_budget_item`,
+over 25 similar rows needs `confirm: true`), `suggest_category` (shows a guess, or "not sure", on
+#needs-review with an Accept button; never categorises), `create_category`, `set_category_emoji`, `set_budget_item`,
 `set_salary_config`, `set_notification_settings`, `exclude_transaction` / `restore_transaction`
 (soft delete), `set_account_label` (names an account such as `CHEQ …1297`, or the counterparty
 behind description text; shown next to transactions, display only), `post_status_to_discord`

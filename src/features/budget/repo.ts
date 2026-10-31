@@ -294,6 +294,18 @@ export function createBudgetRepo(db: Database) {
       return updated.length > 0;
     },
 
+    // Records a suggestion (null categoryId = looked at, not sure) on rows that are still
+    // uncategorised. Returns the ids it changed.
+    async setSuggestion(userId: string, ids: string[], suggestion: { categoryId: string | null; note: string | null }) {
+      if (ids.length === 0) return [];
+      const updated = await db
+        .update(transactions)
+        .set({ suggestedCategoryId: suggestion.categoryId, suggestionNote: suggestion.note, suggestedAt: new Date() })
+        .where(and(live(userId), eq(transactions.categorySource, 'none'), inArray(transactions.id, ids)))
+        .returning({ id: transactions.id });
+      return updated.map((r) => r.id);
+    },
+
     // Categorised descriptions to borrow suggestions from: learned rules (the user's own choices),
     // then descriptions categorised by hand.
     async listKnownDescriptions(userId: string) {

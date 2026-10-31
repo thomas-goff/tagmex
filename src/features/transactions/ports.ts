@@ -64,7 +64,8 @@ export interface TransactionStore {
   // Skips rows that are no longer uncategorised (never overwrites a rule or manual choice).
   categoriseIfUncategorised(userId: string, ids: string[], category: CategoryAssignment): Promise<number>;
   listUncategorised(userId: string): Promise<Pick<StoredTransaction, 'id' | 'descriptionNormalised'>[]>;
-  summariseUncategorised(userId: string): Promise<UncategorisedGroup[]>;
+  // unreviewedOnly: just the rows nobody has suggested a category for yet (suggest_category).
+  summariseUncategorised(userId: string, options?: { unreviewedOnly?: boolean }): Promise<UncategorisedGroup[]>;
 }
 
 export interface CategoryStore {

@@ -160,6 +160,7 @@ describe('MCP tools', () => {
           resolved.push([outcome, ...ids]);
           return ids.length;
         },
+        suggest: async () => 0,
       },
       repo: {
         findTransaction: async () => ({ id, isDeleted: false, description: 'CORNER SHOP', occurredOn: '2026-11-01', amountCents: -100 }),
@@ -185,6 +186,82 @@ describe('MCP tools', () => {
     assert.equal(corrected, 1);
     // The transaction and everything the rule fixed are ticked off in #needs-review.
     assert.deepEqual(resolved, [['🛒 Groceries', id, ...similar]]);
+  });
+
+  test('suggest_category records a suggestion for the group and shows it, without categorising', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const stored: unknown[] = [];
+    const shown: unknown[] = [];
+    let corrected = 0;
+    const tx = { id, isDeleted: false, categorySource: 'none', categoryName: null, description: 'CORNER SHOP', occurredOn: '2026-11-01', amountCents: -100 };
+    const categories = [{ id: 'g', name: 'Groceries', emoji: '🛒' }];
+    const { deps } = fakeDeps({
+      review: {
+        resolve: async () => 0,
+        async suggest(_userId, ids, suggestion) {
+          shown.push([ids, suggestion]);
+          return ids.length;
+        },
+      },
+      repo: {
+        findTransaction: async () => tx,
+        listCategories: async () => categories,
+        async setSuggestion(_userId: string, ids: string[], suggestion: unknown) {
+          stored.push([ids, suggestion]);
+          return ids;
+        },
+      } as never,
+      ledger: {
+        stores: { categories: { listCategories: async () => [{ id: 'g', name: 'Groceries', kind: 'expense', isSystem: false }] } },
+        corrector: {
+          findSimilar: async () => ['similar-1'],
+          correct: async () => {
+            corrected++;
+            return {} as never;
+          },
+        },
+      } as never,
+    });
+
+    const res = await runTool(tool('suggest_category'), { transaction_id: id, category: 'groceries', note: 'A corner​shop' }, { principal, deps });
+    assert.equal(res.isError, undefined);
+    assert.deepEqual(res.structuredContent, { transaction_id: id, category_id: 'g', category: 'Groceries', suggested: 2, categorised: 0 });
+    assert.deepEqual(stored, [[[id, 'similar-1'], { categoryId: 'g', note: 'A corner shop' }]]);
+    assert.deepEqual(shown, [[[id, 'similar-1'], { category: categories[0], note: 'A corner shop' }]]);
+    assert.equal(corrected, 0);
+
+    // Not sure: still recorded, so the next pass skips it.
+    const unsure = await runTool(tool('suggest_category'), { transaction_id: id, category: null, apply_to_similar: false }, { principal, deps });
+    assert.match(String(unsure.content[0]!.type === 'text' && unsure.content[0]!.text), /^Marked as not sure/);
+    assert.deepEqual(stored[1], [[id], { categoryId: null, note: null }]);
+
+    // Already categorised: nothing to suggest.
+    tx.categorySource = 'manual';
+    const done = await runTool(tool('suggest_category'), { transaction_id: id, category: 'groceries' }, { principal, deps });
+    assert.equal(done.isError, true);
+    assert.equal(stored.length, 2);
+  });
+
+  test('get_uncategorised with unreviewed_only skips what already has a suggestion', async () => {
+    const asked: unknown[] = [];
+    const { deps } = fakeDeps({
+      accounts: { listLabels: async () => [] } as never,
+      repo: { listKnownDescriptions: async () => [] } as never,
+      ledger: {
+        stores: {
+          categories: { listCategories: async () => [] },
+          transactions: {
+            summariseUncategorised: async (_userId: string, options: unknown) => {
+              asked.push(options);
+              return [];
+            },
+          },
+        },
+      } as never,
+    });
+    const res = await runTool(READ_TOOLS.find((t) => t.name === 'get_uncategorised')!, { unreviewed_only: true }, { principal, deps });
+    assert.deepEqual(asked, [{ unreviewedOnly: true }]);
+    assert.match(String(res.content[0]!.type === 'text' && res.content[0]!.text), /Nothing new to look at/);
   });
 
   test('rate limited after too many calls in a minute', async () => {

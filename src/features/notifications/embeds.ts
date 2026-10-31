@@ -20,9 +20,33 @@ export interface DiscordEmbed {
   timestamp?: string;
 }
 
+// Message components (buttons and dropdowns), in action rows. Only sent once Discord interactions
+// are set up (see discord.ts); see ./review-components for the #needs-review controls.
+export interface DiscordButton {
+  type: 2;
+  // 1 primary, 2 secondary, 3 success, 4 danger.
+  style: 1 | 2 | 3 | 4;
+  label: string;
+  custom_id: string;
+}
+
+export interface DiscordSelect {
+  type: 3;
+  custom_id: string;
+  placeholder?: string;
+  options: { label: string; value: string; default?: boolean }[];
+}
+
+export interface DiscordActionRow {
+  type: 1;
+  components: (DiscordButton | DiscordSelect)[];
+}
+
 export interface DiscordPayload {
   content?: string;
   embeds?: DiscordEmbed[];
+  // [] removes a message's controls when it's edited; leaving it out keeps them.
+  components?: DiscordActionRow[];
 }
 
 // Discord's limits.
@@ -175,7 +199,28 @@ export function reviewEmbed(t: TransactionInfo): DiscordEmbed {
   };
 }
 
-// The review message once it's categorised (outcome "🛒 Groceries") or excluded ("🗑️ excluded").
+export const SUGGESTION_FIELD = '💡 Claude suggests';
+
+// The review message with a suggestion: "🛒 Groceries" and why, or that Claude couldn't place it.
+// Replaces an earlier suggestion; `components` are the controls rebuilt to offer it.
+export function suggestedReviewPayload(
+  payload: DiscordPayload,
+  suggestion: { category: { name: string; emoji: string | null } | null; note: string | null },
+  components: DiscordActionRow[],
+): DiscordPayload {
+  const guess = suggestion.category ? categoryTag(suggestion.category.name, suggestion.category.emoji) : "🤔 Not sure, sir. This one's yours.";
+  const value = suggestion.note ? `${guess}\n${escapeMarkdown(suggestion.note)}` : guess;
+  return {
+    ...payload,
+    embeds: (payload.embeds ?? []).map((embed, i) =>
+      i > 0 ? embed : { ...embed, fields: [...(embed.fields ?? []).filter((f) => f.name !== SUGGESTION_FIELD), field(SUGGESTION_FIELD, value)] },
+    ),
+    components,
+  };
+}
+
+// The review message once it's categorised (outcome "🛒 Groceries") or excluded ("🗑️ excluded"):
+// the suggestion and the controls go.
 export function resolvedReviewPayload(payload: DiscordPayload, outcome: string): DiscordPayload {
   return {
     ...payload,
@@ -187,9 +232,12 @@ export function resolvedReviewPayload(payload: DiscordPayload, outcome: string):
             title: `✅ Sorted, ${MASTER}`,
             description: 'Filed away, sir.',
             color: COLOURS.green,
-            fields: (embed.fields ?? []).map((f) => (f.name === '🏷️ Category' ? { ...f, value: clip(outcome, LIMITS.fieldValue) } : f)),
+            fields: (embed.fields ?? [])
+              .filter((f) => f.name !== SUGGESTION_FIELD)
+              .map((f) => (f.name === '🏷️ Category' ? { ...f, value: clip(outcome, LIMITS.fieldValue) } : f)),
           },
     ),
+    components: [],
   };
 }
 

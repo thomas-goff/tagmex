@@ -19,6 +19,12 @@ const schema = z.object({
   DISCORD_PING_USER_ID: optional(z.string().regex(/^\d{5,25}$/, 'a numeric Discord user id')),
   // Pennyworth's avatar on every post (a public image URL). Unset = each webhook's own avatar.
   DISCORD_AVATAR_URL: optional(z.url()),
+  // The Discord application's public key (Developer Portal → General Information), for checking
+  // that requests to /api/discord/interactions come from Discord. Setting it turns on the
+  // #needs-review dropdown and buttons, which also need DISCORD_REVIEW_WEBHOOK_URL to be a webhook
+  // the application made (scripts/discord-review-webhook.ts). Only DISCORD_PING_USER_ID may use
+  // them. Unset = no controls.
+  DISCORD_PUBLIC_KEY: optional(z.string().regex(/^[0-9a-f]{64}$/i, 'a 64-character hex public key')),
   CRON_SECRET: z.string().min(32),
 });
 

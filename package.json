@@ -19,7 +19,8 @@
     "test": "tsx --test \"src/**/*.test.ts\"",
     "db:seed": "tsx scripts/seed.ts",
     "transactions:backfill": "tsx scripts/backfill-transactions.ts",
-    "users:allow": "tsx scripts/allow-user.ts"
+    "users:allow": "tsx scripts/allow-user.ts",
+    "discord:review-webhook": "tsx scripts/discord-review-webhook.ts"
   },
   "dependencies": {
     "@clerk/backend": "3.26.5",
