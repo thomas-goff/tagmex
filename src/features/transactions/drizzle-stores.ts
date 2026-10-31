@@ -107,11 +107,12 @@ function transactionStore(db: Database): TransactionStore {
       return updated.length;
     },
 
-    listUncategorised(userId) {
-      return db
-        .select({ id: transactions.id, descriptionNormalised: transactions.descriptionNormalised })
+    async listUncategorised(userId) {
+      const rows = await db
+        .select({ id: transactions.id, descriptionNormalised: transactions.descriptionNormalised, amount: transactions.amount })
         .from(transactions)
         .where(and(live(userId), uncategorised));
+      return rows.map(({ amount, ...r }) => ({ ...r, amountCents: decimalToCents(amount) }));
     },
 
     async summariseUncategorised(userId, { unreviewedOnly = false } = {}) {
@@ -141,6 +142,7 @@ function categoryStore(db: Database): CategoryStore {
     pattern: categoryRules.pattern,
     categoryId: categoryRules.categoryId,
     origin: categoryRules.origin,
+    direction: categoryRules.direction,
   };
 
   return {
@@ -161,7 +163,7 @@ function categoryStore(db: Database): CategoryStore {
         .insert(categoryRules)
         .values({ userId, ...rule })
         .onConflictDoUpdate({
-          target: [categoryRules.userId, categoryRules.matchType, categoryRules.pattern],
+          target: [categoryRules.userId, categoryRules.matchType, categoryRules.pattern, categoryRules.direction],
           set: { categoryId: rule.categoryId, origin: rule.origin, updatedAt: new Date() },
         })
         .returning(ruleColumns);

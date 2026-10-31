@@ -1,4 +1,4 @@
-import { ruleMatches, specificity } from './rule-matchers';
+import { ruleApplies, specificity } from './rule-matchers';
 import type {
   CategorisableTransaction,
   CategorisationStep,
@@ -19,11 +19,16 @@ export function sourceForRule(rule: Pick<CategoryRule, 'matchType'>): CategorySo
   return rule.matchType === 'exact' ? 'user_rule' : 'merchant_rule';
 }
 
-// The best rule of one match type: learned over seed, then the most specific pattern.
-export function bestMatchingRule(rules: CategoryRule[], matchType: RuleMatchType, description: string) {
+// The best rule of one match type: learned over seed, then one for this direction over a
+// direction-less one, then the most specific pattern.
+export function bestMatchingRule(
+  rules: CategoryRule[],
+  matchType: RuleMatchType,
+  tx: Pick<CategorisableTransaction, 'descriptionNormalised' | 'amountCents'>,
+) {
   let best: CategoryRule | null = null;
   for (const rule of rules) {
-    if (rule.matchType !== matchType || !ruleMatches(rule, description)) continue;
+    if (rule.matchType !== matchType || !ruleApplies(rule, tx)) continue;
     if (!best || outranks(rule, best)) best = rule;
   }
   return best;
@@ -31,12 +36,13 @@ export function bestMatchingRule(rules: CategoryRule[], matchType: RuleMatchType
 
 function outranks(a: CategoryRule, b: CategoryRule) {
   if (ORIGIN_RANK[a.origin] !== ORIGIN_RANK[b.origin]) return ORIGIN_RANK[a.origin] < ORIGIN_RANK[b.origin];
+  if ((a.direction === null) !== (b.direction === null)) return a.direction !== null;
   return specificity(a) > specificity(b);
 }
 
 function ruleStep(matchType: RuleMatchType): CategorisationStep {
   return (tx, { rules }) => {
-    const rule = bestMatchingRule(rules, matchType, tx.descriptionNormalised);
+    const rule = bestMatchingRule(rules, matchType, tx);
     return rule && { categoryId: rule.categoryId, source: sourceForRule(rule), ruleId: rule.id };
   };
 }

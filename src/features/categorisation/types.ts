@@ -7,6 +7,7 @@ export const EXPENSE_TYPES = ['static', 'dynamic', 'irregular'] as const;
 export const CATEGORY_SOURCES = ['user_rule', 'merchant_rule', 'transfer', 'manual', 'none'] as const;
 export const RULE_MATCH_TYPES = ['exact', 'token'] as const;
 export const RULE_ORIGINS = ['seed', 'learned'] as const;
+export const RULE_DIRECTIONS = ['out', 'in'] as const;
 
 export type CategoryKind = (typeof CATEGORY_KINDS)[number];
 // Used by the phase 3 budget: fixed (rent), variable (groceries) or occasional (clothing).
@@ -17,6 +18,8 @@ export type CategorySource = (typeof CATEGORY_SOURCES)[number];
 export type RuleMatchType = (typeof RULE_MATCH_TYPES)[number];
 // `learned` rules come from the user's corrections and outrank `seed` rules.
 export type RuleOrigin = (typeof RULE_ORIGINS)[number];
+// Which way the money moves: `out` is a negative amount, `in` a positive one.
+export type RuleDirection = (typeof RULE_DIRECTIONS)[number];
 
 export interface Category {
   id: string;
@@ -32,6 +35,10 @@ export interface CategoryRule {
   pattern: string;
   categoryId: string;
   origin: RuleOrigin;
+  // Only matches money moving this way; null matches either. Learned rules take the direction of
+  // the transaction they were learned from, so "ABSA BANK SAVINGS" leaving the cheque account can
+  // be Savings while the same description arriving in the savings account stays a transfer.
+  direction: RuleDirection | null;
 }
 
 // The fields categorisation looks at, whether the transaction is stored yet or not.

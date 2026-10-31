@@ -16,7 +16,7 @@ export async function seedDefaults(stores: Pick<Stores, 'categories' | 'transact
     userId,
     DEFAULT_MERCHANT_RULES.flatMap(({ pattern, category }) => {
       const categoryId = idByName.get(category);
-      return categoryId ? [{ matchType: 'token' as const, pattern, categoryId, origin: 'seed' as const }] : [];
+      return categoryId ? [{ matchType: 'token' as const, pattern, categoryId, origin: 'seed' as const, direction: null }] : [];
     }),
   );
 

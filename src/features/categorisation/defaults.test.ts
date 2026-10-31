@@ -12,6 +12,7 @@ const seededRules: CategoryRule[] = DEFAULT_MERCHANT_RULES.map((r, i) => ({
   pattern: r.pattern,
   categoryId: r.category,
   origin: 'seed',
+  direction: null,
 }));
 
 const categoryOf = (descriptionNormalised: string) =>

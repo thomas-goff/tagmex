@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { ruleMatches, tokenise } from './rule-matchers';
+import { directionOf, ruleApplies, ruleMatches, tokenise } from './rule-matchers';
 
 const token = (pattern: string) => ({ matchType: 'token' as const, pattern });
 const exact = (pattern: string) => ({ matchType: 'exact' as const, pattern });
@@ -62,5 +62,30 @@ describe('exact rules', () => {
 
   test('an empty pattern never matches', () => {
     assert.ok(!ruleMatches(exact(''), ''));
+  });
+});
+
+describe('ruleApplies', () => {
+  const debit = { descriptionNormalised: 'ABSA BANK SAVINGS', amountCents: -200_000 };
+  const credit = { descriptionNormalised: 'ABSA BANK SAVINGS', amountCents: 200_000 };
+
+  test('a direction is the sign of the amount, and zero has none', () => {
+    assert.equal(directionOf(-1), 'out');
+    assert.equal(directionOf(1), 'in');
+    assert.equal(directionOf(0), null);
+  });
+
+  test('a directed rule only applies to money moving its way', () => {
+    const out = { ...exact('ABSA BANK SAVINGS'), direction: 'out' as const };
+    assert.ok(ruleApplies(out, debit));
+    assert.ok(!ruleApplies(out, credit));
+    assert.ok(!ruleApplies(out, { ...debit, amountCents: 0 }));
+  });
+
+  test('a direction-less rule applies either way, and the description still has to match', () => {
+    const either = { ...exact('ABSA BANK SAVINGS'), direction: null };
+    assert.ok(ruleApplies(either, debit));
+    assert.ok(ruleApplies(either, credit));
+    assert.ok(!ruleApplies(either, { ...debit, descriptionNormalised: 'ABSA BANK' }));
   });
 });

@@ -22,6 +22,7 @@ const rule = (over: Partial<CategoryRule> & Pick<CategoryRule, 'id' | 'pattern'>
   matchType: 'token',
   categoryId: `cat-${over.id}`,
   origin: 'seed',
+  direction: null,
   ...over,
 });
 
@@ -112,6 +113,61 @@ describe('categorise', () => {
   test('no transfer detection without a transfer category', () => {
     const result = categorise(tx(), context({ transferCategoryId: null, transferCandidates: [candidate()] }));
     assert.deepEqual(result, UNCATEGORISED);
+  });
+
+  describe('rule direction', () => {
+    // Moving money into savings: both legs share the description. The cheque leg is Savings.
+    const savings = rule({
+      id: 'savings',
+      matchType: 'exact',
+      origin: 'learned',
+      pattern: 'ABSA BANK SAVINGS',
+      direction: 'out',
+    });
+    const debit = tx({ descriptionNormalised: 'ABSA BANK SAVINGS', amountCents: -200_000, accountLast4: '9876' });
+    const credit = tx({ descriptionNormalised: 'ABSA BANK SAVINGS', amountCents: 200_000, accountLast4: '0152' });
+
+    test('a money-out rule catches money out', () => {
+      assert.deepEqual(categorise(debit, context({ rules: [savings] })), {
+        categoryId: 'cat-savings',
+        source: 'user_rule',
+        ruleId: 'savings',
+      });
+    });
+
+    test('a money-out rule skips the credit, which still pairs as a transfer', () => {
+      const uncategorisedDebit = candidate({ id: 'cheque-leg', amountCents: -200_000, accountLast4: '9876' });
+      assert.deepEqual(categorise(credit, context({ rules: [savings], transferCandidates: [uncategorisedDebit] })), {
+        categoryId: 'cat-transfer',
+        source: 'transfer',
+        ruleId: null,
+        counterpartId: 'cheque-leg',
+      });
+    });
+
+    test('a money-in rule skips money out', () => {
+      const income = rule({ id: 'in', matchType: 'exact', origin: 'learned', pattern: 'ABSA BANK SAVINGS', direction: 'in' });
+      assert.deepEqual(categorise(debit, context({ rules: [income] })), UNCATEGORISED);
+      assert.equal(categorise(credit, context({ rules: [income] })).ruleId, 'in');
+    });
+
+    test('a direction-less rule matches both ways', () => {
+      const either = rule({ id: 'either', matchType: 'exact', origin: 'learned', pattern: 'ABSA BANK SAVINGS' });
+      assert.equal(categorise(debit, context({ rules: [either] })).ruleId, 'either');
+      assert.equal(categorise(credit, context({ rules: [either] })).ruleId, 'either');
+    });
+
+    test("a rule for the transaction's direction outranks a direction-less one", () => {
+      const either = rule({ id: 'either', matchType: 'exact', origin: 'learned', pattern: 'ABSA BANK SAVINGS' });
+      const rules = [either, savings];
+      assert.equal(categorise(debit, context({ rules })).ruleId, 'savings');
+      assert.equal(categorise(credit, context({ rules })).ruleId, 'either');
+    });
+
+    test('directed token rules respect direction too', () => {
+      const refunds = rule({ id: 'refunds', pattern: 'TAKEALOT', direction: 'in' });
+      assert.equal(categorise(tx({ descriptionNormalised: 'TAKEALOT JHB' }), context({ rules: [refunds] })).source, 'none');
+    });
   });
 
   test('a step that throws is reported and skipped, never thrown', () => {
