@@ -18,11 +18,13 @@ interface Options<T> {
   onPosted?: (posted: T[]) => Promise<void>;
   // A #needs-review message posted for one item: its id and what was posted, to edit later.
   onReviewMessage?: (item: T, messageId: string, payload: DiscordPayload) => Promise<void>;
+  // The controls under an item's #needs-review message (category dropdown, Exclude).
+  reviewComponents?: (item: T) => DiscordPayload['components'];
 }
 
 export async function postToDiscord<T extends NotifiableEmail>(
   items: T[],
-  { prefix = '', channel, onPosted = async () => {}, onReviewMessage }: Options<T> = {},
+  { prefix = '', channel, onPosted = async () => {}, onReviewMessage, reviewComponents }: Options<T> = {},
 ) {
   const groups = new Map<DiscordChannel, T[]>();
   for (const item of items) {
@@ -33,7 +35,8 @@ export async function postToDiscord<T extends NotifiableEmail>(
   for (const [target, group] of groups) {
     if (target === 'review' && !channel) {
       for (const item of group.slice(0, REVIEW_LIMIT)) {
-        const payload = emailPayload(item, prefix);
+        const components = reviewComponents?.(item);
+        const payload = components ? { ...emailPayload(item, prefix), components } : emailPayload(item, prefix);
         const messageId = await postMessage('review', payload);
         // Marked as posted first: if remembering the message fails, it isn't posted again; it just
         // won't be ticked off later.

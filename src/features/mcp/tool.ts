@@ -41,8 +41,8 @@ export interface ToolDeps {
   accounts: AccountLabelRepo;
   ledger: { stores: Pick<Stores, 'categories' | 'transactions'>; corrector: CategoryCorrector };
   audit: AuditLog;
-  // #needs-review messages to tick off when their transactions are sorted.
-  review: Pick<ReviewMessages, 'resolve'>;
+  // #needs-review messages to tick off when their transactions are sorted, or to show a suggestion.
+  review: Pick<ReviewMessages, 'resolve' | 'suggest'>;
   // Posts to a Discord channel's webhook; returns the message id.
   discord: { post(channel: DiscordChannel, payload: DiscordPayload): Promise<string> };
   // Re-parse failed bank emails (after a parser fix). Posts results to Discord like a normal sync.
@@ -133,6 +133,7 @@ const COMMAND_HINTS: Partial<Record<CommandErrorCode, string>> = {
   unknown_category: ' Call list_categories, or create_category to add one.',
   unknown_transaction: ' Find ids with list_transactions or get_uncategorised.',
   excluded: ' (restore_transaction)',
+  already_categorised: ' Nothing to suggest; move on to the next one.',
   nothing_to_change: ' Pass allocated, expense_type, expected_day or active.',
   zero_salary: ' Pass expected_amount: null to accept any amount.',
 };

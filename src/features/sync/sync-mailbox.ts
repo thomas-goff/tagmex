@@ -8,6 +8,7 @@ import { bankMailQuery, gmail, isBankSender } from '@/features/gmail';
 import { GmailError } from '@/features/gmail/client';
 import { budget, budgetRepo } from '@/features/budget';
 import { budgetStanding } from '@/features/budget/standing';
+import { reviewComponents } from '@/features/notifications/review-components';
 import { reviewMessages } from '@/features/notifications/review-messages';
 import { ledger } from '@/features/transactions';
 import type { RecordOutcome, TransactionRecorder } from '@/features/transactions/record-transaction';
@@ -104,6 +105,7 @@ export async function syncMailbox(userId: string, { retryFailed = false } = {}) 
       onReviewMessage: async (o, messageId, payload) => {
         if (o.recorded) await reviewMessages.record(userId, o.recorded.transactionId, messageId, payload);
       },
+      reviewComponents: (o) => (o.recorded ? reviewComponents(o.recorded.transactionId, context.categories) : undefined),
     });
 
     // 4. Advance the cursor only once everything above succeeded.
@@ -125,12 +127,13 @@ async function discordContextFor(userId: string) {
     const [summary, categories] = await Promise.all([budget.summary(userId), budgetRepo.listCategories(userId)]);
     const emojiById = new Map(categories.map((c) => [c.id, c.emoji]));
     return {
+      categories,
       emoji: (categoryId: string | null) => (categoryId ? (emojiById.get(categoryId) ?? null) : null),
       standing: (categoryId: string | null, occurredOn: string) => budgetStanding(summary, categoryId, occurredOn),
     };
   } catch (err) {
     console.error('budget standing unavailable for Discord messages', err);
-    return { emoji: () => null, standing: () => null };
+    return { categories: [], emoji: () => null, standing: () => null };
   }
 }
 

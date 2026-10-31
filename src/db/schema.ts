@@ -162,6 +162,12 @@ export const transactions = pgTable(
     // Gmail message id for `gmail`.
     sourceRef: text('source_ref').notNull(),
     isDeleted: boolean('is_deleted').notNull().default(false),
+    // A suggested category for an uncategorised row (suggest_category), offered on #needs-review
+    // with an Accept button, never applied by itself. suggested_at with no category means "looked
+    // at, not sure". Either way the row has been looked at, so the next pass skips it.
+    suggestedCategoryId: uuid('suggested_category_id').references(() => categories.id, { onDelete: 'set null' }),
+    suggestionNote: text('suggestion_note'),
+    suggestedAt: timestamptz('suggested_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
   },
   (t) => [

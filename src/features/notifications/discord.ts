@@ -28,20 +28,22 @@ export interface PostOptions {
   ping?: boolean;
 }
 
-// Embeds without a time get the posting time, shown next to the footer.
+// Embeds without a time get the posting time, shown next to the footer. Components only go out
+// once interactions are set up: nothing could answer a click before that.
 function body(message: DiscordMessage) {
   const payload = typeof message === 'string' ? { content: message } : message;
   const timestamp = new Date().toISOString();
   return {
     content: payload.content ?? '',
     embeds: (payload.embeds ?? []).map((e) => ({ timestamp, ...e })),
+    ...(env.DISCORD_PUBLIC_KEY && payload.components ? { components: payload.components } : {}),
   };
 }
 
 // Posts a message and returns its id, for editing it later.
 export async function postMessage(channel: DiscordChannel, message: DiscordMessage, { ping = false }: PostOptions = {}) {
   const userId = ping ? env.DISCORD_PING_USER_ID : undefined;
-  const { content, embeds } = body(message);
+  const { content, ...rest } = body(message);
   const url = new URL(webhookFor(channel));
   url.searchParams.set('wait', 'true');
   const res = await fetch(url, {
@@ -52,7 +54,7 @@ export async function postMessage(channel: DiscordChannel, message: DiscordMessa
       ...(env.DISCORD_AVATAR_URL ? { avatar_url: env.DISCORD_AVATAR_URL } : {}),
       // A mention inside an embed never notifies, so the ping goes in the message text.
       content: userId ? `<@${userId}> ${content}`.trim() : content,
-      embeds,
+      ...rest,
       // Never let message text (bank descriptions, errors) mention anyone; only the explicit ping.
       allowed_mentions: { parse: [], users: userId ? [userId] : [] },
     }),
@@ -75,6 +77,33 @@ export async function editMessage(channel: DiscordChannel, messageId: string, me
     }),
   });
   if (!res.ok) throw new Error(`Discord message edit failed: ${res.status}`);
+}
+
+// Replies to a button or dropdown click, through the interaction's own token (valid 15 minutes).
+// Follow-ups are ephemeral: only whoever clicked sees them.
+const INTERACTIONS_API = 'https://discord.com/api/v10/webhooks';
+
+export interface InteractionReply {
+  content: string;
+  components?: DiscordPayload['components'];
+}
+
+export async function followUpInteraction(applicationId: string, token: string, reply: InteractionReply) {
+  await interactionRequest('POST', `${applicationId}/${token}`, { ...reply, flags: 64 });
+}
+
+// Edits the message the clicked control was on (used for the ephemeral "file all N?" reply).
+export async function editInteractionMessage(applicationId: string, token: string, reply: InteractionReply) {
+  await interactionRequest('PATCH', `${applicationId}/${token}/messages/@original`, reply);
+}
+
+async function interactionRequest(method: string, path: string, body: object) {
+  const res = await fetch(`${INTERACTIONS_API}/${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, allowed_mentions: { parse: [] } }),
+  });
+  if (!res.ok) throw new Error(`Discord interaction reply failed: ${res.status}`);
 }
 
 export async function notify(message: DiscordMessage, channel: DiscordChannel = 'transactions', options?: PostOptions) {
