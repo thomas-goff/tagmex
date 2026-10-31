@@ -18,7 +18,9 @@ export function shortDate(iso: string) {
   return `${WEEKDAYS[dayOfWeek(iso)]} ${day} ${monthName(month).slice(0, 3)}`;
 }
 
-export function digestPayload(s: CycleSummary, tips: Tip[], title?: string): DiscordPayload {
+// On a cycle's first day, yesterday is in the previous cycle's summary.
+export function digestPayload(s: CycleSummary, tips: Tip[], { title, previous }: { title?: string; previous?: CycleSummary | null } = {}): DiscordPayload {
+  const yesterday = s.yesterday ?? previous?.yesterday ?? null;
   return {
     embeds: [
       digestEmbed(
@@ -31,6 +33,7 @@ export function digestPayload(s: CycleSummary, tips: Tip[], title?: string): Dis
           dailyAllowanceCents: s.dailyAllowanceCents,
           spentCents: s.spentCents,
           allocatedCents: s.allocatedCents,
+          yesterday: yesterday && { dateLabel: shortDate(yesterday.date), outCents: yesterday.outCents, count: yesterday.count },
           categories: s.categories,
           pending: s.pendingDebitOrders.map((p) => ({
             name: p.name,

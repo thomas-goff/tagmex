@@ -87,6 +87,19 @@ describe('cycle summary', () => {
     assert.equal(s.pendingTotalCents, 900_00);
   });
 
+  test("yesterday's money out is gross and leaves out transfers and income", () => {
+    // 1 Nov: the bounced debit order's credit and the uncategorised R510 in don't net anything off.
+    assert.deepEqual(summarise(november, '2026-11-02', rows).yesterday, { date: '2026-11-01', outCents: 1758_86 + 828_99 + 72_00 + 1200_00, count: 4 });
+    assert.deepEqual(summarise(november, '2026-11-01', rows).yesterday, { date: '2026-10-31', outCents: 500_00, count: 1 });
+    assert.deepEqual(summarise(november, '2026-10-31', rows).yesterday, { date: '2026-10-30', outCents: 0, count: 0 });
+  });
+
+  test("yesterday belongs to the cycle it fell in", () => {
+    assert.equal(summarise(november, '2026-10-30', rows).yesterday, null);
+    assert.equal(summarise(october, '2026-10-30', [row('2026-10-29', -80_00, 'Groceries')]).yesterday?.outCents, 80_00);
+    assert.equal(summarise(october, '2026-11-05', [], false).yesterday, null);
+  });
+
   test('discretionary left ignores static items and overspending; allowance per day to payday', () => {
     // Groceries 3550 + Clothing max(-200, 0).
     assert.equal(s.discretionaryLeftCents, 3550_00);

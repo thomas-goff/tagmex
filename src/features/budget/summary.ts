@@ -1,5 +1,5 @@
 import type { Cycle, CycleStatus } from '@/features/cycle/cycle';
-import { daysInMonth, isoDate, normaliseMonth, parts } from '@/features/cycle/dates';
+import { addDays, daysInMonth, isoDate, normaliseMonth, parts } from '@/features/cycle/dates';
 import type { ExpenseType } from '@/features/categorisation/types';
 import type { BudgetLine, LedgerRow } from './types';
 
@@ -12,6 +12,8 @@ import type { BudgetLine, LedgerRow } from './types';
 //   discretionary left  = sum of max(allocated - spent, 0) over active dynamic and irregular items
 //   daily allowance     = discretionary left / max(days to salary, 1)
 //   net                 = income - spent
+//   yesterday out       = money out the day before today: expense and uncategorised outflows,
+//                         gross (a refund doesn't hide what went out), not transfers or income
 //   status              = settled: a static item paid in full (spent >= allocated). Paying a debit
 //                         order is the plan working, so it's never "over budget", whatever the
 //                         difference; differenceCents says by how much it was off.
@@ -70,6 +72,14 @@ export interface CycleSummary {
   // Current cycle only, and not while salary is overdue.
   dailyAllowanceCents: number | null;
   uncategorised: { count: number; outCents: number; inCents: number };
+  // Only when the day before today is in this cycle: on a cycle's first day it's in the last one.
+  yesterday: DayOut | null;
+}
+
+export interface DayOut {
+  date: string;
+  outCents: number;
+  count: number;
 }
 
 interface Input {
@@ -160,7 +170,15 @@ export function summariseCycle({ cycle, status, today, rows, lines }: Input): Cy
         ? null
         : Math.floor(discretionaryLeftCents / Math.max(status.daysToSalary, 1)),
     uncategorised,
+    yesterday: dayOut(cycle, status, rows, addDays(today, -1)),
   };
+}
+
+// A current cycle whose salary is late runs past its projected end, so its rows reach today.
+function dayOut(cycle: Cycle, status: CycleStatus, rows: readonly LedgerRow[], date: string): DayOut | null {
+  if (date < cycle.start || (date >= cycle.end && !status.isCurrent)) return null;
+  const out = rows.filter((r) => r.occurredOn === date && r.amountCents < 0 && r.categoryKind !== 'transfer' && r.categoryKind !== 'income');
+  return { date, outCents: out.reduce((sum, r) => sum - r.amountCents, 0), count: out.length };
 }
 
 function categoryLine(

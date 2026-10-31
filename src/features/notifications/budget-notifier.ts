@@ -63,7 +63,7 @@ export function createBudgetNotifier({ budget, getSettings, claims, post, now = 
       }
 
       if (digest) {
-        const payload = digestPayload(summary, tips);
+        const payload = digestPayload(summary, tips, { previous });
         const due = force || hourIn(settings.timezone, now()) >= settings.digestHour;
         const status: NotificationStatus = !settings.digestEnabled
           ? 'disabled'

@@ -256,6 +256,7 @@ export interface DigestInput {
   pendingTotalCents: number;
   uncategorised: { count: number; outCents: number };
   tips: string[];
+  yesterday: { dateLabel: string; outCents: number; count: number } | null;
 }
 
 function digestColour(d: DigestInput) {
@@ -274,6 +275,10 @@ export function digestEmbed(d: DigestInput, title = `☀️ Good morning, ${MAST
     ),
     field('💸 Spent', `${formatRand(d.spentCents)} of ${formatRand(d.allocatedCents)} budgeted`, true),
   ];
+  if (d.yesterday) {
+    const { dateLabel, outCents, count } = d.yesterday;
+    fields.push(field(`🧾 Yesterday (${dateLabel})`, count === 0 ? 'Nothing went out, sir.' : `${formatRand(outCents)} out across ${plural(count, 'transaction')}`));
+  }
 
   const budgets = d.categories
     .filter((c) => c.isActive && c.allocatedCents > 0 && c.status !== 'settled' && c.expenseType !== 'static')
