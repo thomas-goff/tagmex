@@ -1,9 +1,10 @@
 import type { BudgetService } from '@/features/budget/service';
 import type { Settings } from '@/features/budget/types';
 import { hourIn } from '@/features/cycle/dates';
-import { budgetAlerts, digestMessage } from './budget-messages';
+import { budgetAlerts, digestPayload } from './budget-messages';
 import type { NotificationClaims } from './claims';
-import type { DiscordChannel } from './discord';
+import type { DiscordChannel, DiscordMessage } from './discord';
+import { payloadText } from './embeds';
 
 // Posts the daily digest and budget alerts. Claim before post: a key is inserted first and the
 // message only goes out if this run inserted it, so retries and overlapping runs never duplicate.
@@ -15,7 +16,7 @@ export interface NotifierDeps {
   budget: Pick<BudgetService, 'overview'>;
   getSettings(userId: string): Promise<Settings>;
   claims: NotificationClaims;
-  post(content: string, channel: DiscordChannel): Promise<void>;
+  post(message: DiscordMessage, channel: DiscordChannel): Promise<void>;
   now?: () => Date;
   log?: Pick<Console, 'error'>;
 }
@@ -30,10 +31,10 @@ export interface NotifyOptions {
 }
 
 export function createBudgetNotifier({ budget, getSettings, claims, post, now = () => new Date(), log = console }: NotifierDeps) {
-  async function send(userId: string, kind: string, key: string, content: string, channel: DiscordChannel, alsoClaim: string[] = []) {
+  async function send(userId: string, kind: string, key: string, message: DiscordMessage, channel: DiscordChannel, alsoClaim: string[] = []) {
     if (!(await claims.claim(userId, kind, key))) return 'already_sent' as const;
     try {
-      await post(content, channel);
+      await post(message, channel);
     } catch (err) {
       log.error(`Discord ${kind} post failed; will retry next run`, err);
       await claims.release(userId, key).catch((e) => log.error('releasing notification claim failed', e));
@@ -57,12 +58,12 @@ export function createBudgetNotifier({ budget, getSettings, claims, post, now = 
           ? 'disabled'
           : dryRun
             ? 'preview'
-            : await send(userId, alert.kind, alert.dedupeKey, alert.message, 'budget', alert.alsoClaim);
-        result.alerts.push({ key: alert.dedupeKey, kind: alert.kind, status, ...(dryRun ? { message: alert.message } : {}) });
+            : await send(userId, alert.kind, alert.dedupeKey, alert.payload, 'budget', alert.alsoClaim);
+        result.alerts.push({ key: alert.dedupeKey, kind: alert.kind, status, ...(dryRun ? { message: payloadText(alert.payload) } : {}) });
       }
 
       if (digest) {
-        const message = digestMessage(summary, tips);
+        const payload = digestPayload(summary, tips);
         const due = force || hourIn(settings.timezone, now()) >= settings.digestHour;
         const status: NotificationStatus = !settings.digestEnabled
           ? 'disabled'
@@ -70,8 +71,8 @@ export function createBudgetNotifier({ budget, getSettings, claims, post, now = 
             ? 'preview'
             : !due
               ? 'not_due'
-              : await send(userId, 'digest', `digest:${summary.today}`, message, 'budget');
-        result.digest = { status, ...(dryRun ? { message } : {}) };
+              : await send(userId, 'digest', `digest:${summary.today}`, payload, 'budget');
+        result.digest = { status, ...(dryRun ? { message: payloadText(payload) } : {}) };
       }
       return result;
     },

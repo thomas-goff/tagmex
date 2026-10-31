@@ -5,18 +5,19 @@ import type { BudgetService } from '@/features/budget/service';
 import { DEFAULT_SETTINGS } from '@/features/budget/types';
 import type { BudgetLine, LedgerRow } from '@/features/budget/types';
 import { cycleContaining, cycleStatus, previousCycle } from '@/features/cycle/cycle';
-import { budgetAlerts, digestMessage, thresholdKey } from './budget-messages';
+import { budgetAlerts, digestPayload, thresholdKey } from './budget-messages';
+import { embedLength, payloadText } from './embeds';
 import { createBudgetNotifier } from './budget-notifier';
 import { createSystemAlerts, errorFingerprint } from './system-alerts';
 import { budgetStanding } from '@/features/budget/standing';
 
 const starts = [{ transactionId: 'sal', occurredOn: '2026-10-30', amountCents: 30_713_54 }];
 const lines: BudgetLine[] = [
-  { categoryId: 'g', categoryName: 'Groceries', expenseType: 'dynamic', allocatedCents: 1000_00, expectedDay: null, isActive: true, sortOrder: 0 },
-  { categoryId: 'i', categoryName: 'Insurance', expenseType: 'static', allocatedCents: 900_00, expectedDay: 1, isActive: true, sortOrder: 1 },
+  { categoryId: 'g', categoryName: 'Groceries', categoryEmoji: '🛒', expenseType: 'dynamic', allocatedCents: 1000_00, expectedDay: null, isActive: true, sortOrder: 0 },
+  { categoryId: 'i', categoryName: 'Insurance', categoryEmoji: '🛡️', expenseType: 'static', allocatedCents: 900_00, expectedDay: 1, isActive: true, sortOrder: 1 },
 ];
 const spend = (cents: number): LedgerRow[] => [
-  { id: 't', occurredOn: '2026-10-31', amountCents: -cents, categoryId: 'g', categoryKind: 'expense', categoryName: 'Groceries' },
+  { id: 't', occurredOn: '2026-10-31', amountCents: -cents, categoryId: 'g', categoryKind: 'expense', categoryName: 'Groceries', categoryEmoji: '🛒' },
 ];
 
 function summaryOn(today: string, rows: LedgerRow[]): CycleSummary {
@@ -45,9 +46,9 @@ function harness(over: { today?: string; rows?: LedgerRow[]; hourUtc?: number; f
         claimed.delete(key);
       },
     },
-    async post(content, channel) {
+    async post(message, channel) {
       if (failPosts-- > 0) throw new Error('Discord 500');
-      posts.push({ content, channel });
+      posts.push({ content: payloadText(message), channel });
     },
     // 07:30 SAST by default, past the 07:00 digest hour.
     now: () => new Date(`${today}T${String(over.hourUtc ?? 5).padStart(2, '0')}:30:00Z`),
@@ -97,7 +98,7 @@ describe('budget notifier', () => {
     const { notifier, posts, claimed } = harness({ rows: spend(1200_00) });
     const result = await notifier.run('owner', { digest: true, dryRun: true });
     assert.equal(result.digest?.status, 'preview');
-    assert.ok(result.digest?.message?.includes('Budget'));
+    assert.ok(result.digest?.message?.includes('Good morning, Master Goff'));
     assert.equal(posts.length + claimed.size, 0);
   });
 });
@@ -117,7 +118,7 @@ describe('system alerts', () => {
       },
       async post(content, channel, options) {
         assert.equal(channel, 'system');
-        posts.push({ content, ping: options?.ping });
+        posts.push({ content: payloadText(content), ping: options?.ping });
       },
     });
     return { alerts, posts };
@@ -142,7 +143,7 @@ describe('system alerts', () => {
         },
         release: async () => {},
       },
-      post: async (content) => void posts.push(content),
+      post: async (content) => void posts.push(payloadText(content)),
       log: { error: () => {} },
     });
     assert.equal(await alerts.syncFailed('owner', 'sync', 'connection refused', '2026-11-01'), 'sent_without_dedupe');
@@ -164,10 +165,36 @@ describe('system alerts', () => {
 describe('budget standing on transaction lines', () => {
   test('spent of allocated this cycle; nothing for older transactions', () => {
     const s = summaryOn('2026-11-10', spend(850_00));
-    assert.equal(budgetStanding(s, 'g', '2026-10-31'), 'R850.00 of R1,000.00, 85%');
+    const standing = budgetStanding(s, 'g', '2026-10-31')!;
+    assert.deepEqual(
+      [standing.category.emoji, standing.category.spentCents, standing.category.usedPct, standing.category.status],
+      ['🛒', 850_00, 85, 'warning'],
+    );
+    assert.deepEqual(standing.payday, { daysToSalary: 20, salaryOverdue: false });
     assert.equal(budgetStanding(s, 'g', '2026-10-29'), null);
     assert.equal(budgetStanding(s, null, '2026-11-01'), null);
-    assert.equal(budgetStanding(summaryOn('2026-11-10', spend(1200_00)), 'g', '2026-11-01'), 'R1,200.00 of R1,000.00, 120% ⚠️');
+    assert.equal(budgetStanding(summaryOn('2026-11-10', spend(1200_00)), 'g', '2026-11-01')!.category.status, 'over');
+  });
+
+  test('payday is unknown while salary is overdue', () => {
+    assert.deepEqual(budgetStanding(summaryOn('2026-12-02', spend(10_00)), 'g', '2026-11-01')!.payday, { daysToSalary: null, salaryOverdue: true });
+  });
+});
+
+describe('settled static items', () => {
+  const insurance = (cents: number): LedgerRow[] => [
+    { id: 'ins', occurredOn: '2026-11-01', amountCents: -cents, categoryId: 'i', categoryKind: 'expense', categoryName: 'Insurance', categoryEmoji: '🛡️' },
+  ];
+
+  test('a debit order paid at more than its budget gives no threshold alert', () => {
+    const s = summaryOn('2026-11-10', insurance(920_00));
+    assert.equal(s.categories.find((c) => c.categoryId === 'i')!.status, 'settled');
+    assert.deepEqual(budgetAlerts(s, null), []);
+  });
+
+  test('a dynamic item over budget still alerts', () => {
+    const s = summaryOn('2026-11-10', spend(1200_00));
+    assert.deepEqual(budgetAlerts(s, null).map((a) => a.dedupeKey), [thresholdKey(100, '2026-10-30', 'g')]);
   });
 });
 
@@ -176,8 +203,8 @@ describe('budget messages', () => {
     const fresh = summaryOn('2026-10-31', []);
     const alerts = budgetAlerts(fresh, fresh);
     assert.deepEqual(alerts.map((a) => a.dedupeKey), ['salary_landed:2026-10-30']);
-    assert.match(alerts[0]!.message, /R30,713\.54/);
-    assert.match(alerts[0]!.message, /Last cycle/);
+    assert.match(payloadText(alerts[0]!.payload), /R30,713\.54/);
+    assert.match(payloadText(alerts[0]!.payload), /Last cycle/);
     assert.equal(budgetAlerts(summaryOn('2026-11-10', []), null).length, 0);
   });
 
@@ -189,13 +216,24 @@ describe('budget messages', () => {
   test('digest has days to salary, allowance, debit orders and uncategorised', () => {
     const s = summaryOn('2026-11-10', [
       ...spend(200_00),
-      { id: 'u', occurredOn: '2026-11-02', amountCents: -72_00, categoryId: null, categoryKind: null, categoryName: null },
+      { id: 'u', occurredOn: '2026-11-02', amountCents: -72_00, categoryId: null, categoryKind: null, categoryName: null, categoryEmoji: null },
     ]);
-    const text = digestMessage(s, []);
-    assert.match(text, /20 days to salary \(Mon 30 Nov\)/);
-    assert.match(text, /R800\.00 → \*\*R40\.00\/day\*\*/);
-    assert.match(text, /Insurance R900\.00 \(late, Sun 1 Nov\)/);
-    assert.match(text, /1 uncategorised/);
-    assert.ok(text.length < 1900);
+    const payload = digestPayload(s, []);
+    const text = payloadText(payload);
+    assert.match(text, /Salary arrives in \*\*20 days\*\* \(Mon 30 Nov\)/);
+    assert.match(text, /\*\*R40\.00\/day\*\* · R800\.00 left/);
+    assert.match(text, /🛒 Groceries `██░░░░░░` 20% · R800\.00 left/);
+    assert.match(text, /🛡️ Insurance R900\.00 · \*\*late\*\*, Sun 1 Nov/);
+    assert.match(text, /1 transaction \(-R72\.00\)/);
+    assert.ok(embedLength(payload.embeds![0]!) < 6000);
+  });
+
+  test('digest lists settled debit orders apart from the budgets', () => {
+    const s = summaryOn('2026-11-10', [
+      { id: 'ins', occurredOn: '2026-11-01', amountCents: -900_00, categoryId: 'i', categoryKind: 'expense', categoryName: 'Insurance', categoryEmoji: '🛡️' },
+    ]);
+    const text = payloadText(digestPayload(s, []));
+    assert.match(text, /✅ Settled: 🛡️ Insurance/);
+    assert.doesNotMatch(text, /Debit orders to come/);
   });
 });

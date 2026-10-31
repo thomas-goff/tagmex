@@ -7,17 +7,10 @@ import { postMessage } from '@/features/notifications/discord';
 import { reviewMessages } from '@/features/notifications/review-messages';
 import { syncMailbox } from '@/features/sync/sync-mailbox';
 import { ledger } from '@/features/transactions';
-import { createAppUserRepo } from '@/features/users/app-users';
+import { resolveAppUserId } from '@/features/users/resolve';
 import { createAuditLog } from './audit';
-import { verifiedEmails, verifyClerkToken } from './clerk';
+import { verifyClerkToken } from './clerk';
 import { createMcpEndpoint, resourceMetadataUrl, resourceUrl } from './server';
-
-const users = createAppUserRepo(db);
-
-// Linked users resolve with one indexed lookup; a first sign-in costs one Clerk API call.
-async function resolveUserId(clerkUserId: string) {
-  return (await users.findByClerkId(clerkUserId)) ?? users.linkByEmail(clerkUserId, await verifiedEmails(clerkUserId));
-}
 
 export const handleMcpRequest = createMcpEndpoint({
   tools: {
@@ -27,7 +20,7 @@ export const handleMcpRequest = createMcpEndpoint({
     ledger,
     audit: createAuditLog(db),
     review: reviewMessages,
-    discord: { post: (channel, content) => postMessage(channel, content) },
+    discord: { post: (channel, payload) => postMessage(channel, payload) },
     async reprocessFailed(userId) {
       const { fetched, parsed, ignored, failed } = await syncMailbox(userId, { retryFailed: true });
       return { fetched, parsed, ignored, failed };
@@ -37,7 +30,7 @@ export const handleMcpRequest = createMcpEndpoint({
     const origin = new URL(request.url).origin;
     return {
       verifyToken: (token) => verifyClerkToken(token, resourceUrl(origin)),
-      resolveUserId,
+      resolveUserId: resolveAppUserId,
       resourceMetadataUrl: resourceMetadataUrl(origin),
     };
   },

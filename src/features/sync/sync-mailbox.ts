@@ -6,7 +6,7 @@ import { absaParser } from '@/features/bank-email/absa/parser';
 import type { BankEmail, ParseResult } from '@/features/bank-email/types';
 import { bankMailQuery, gmail, isBankSender } from '@/features/gmail';
 import { GmailError } from '@/features/gmail/client';
-import { budget } from '@/features/budget';
+import { budget, budgetRepo } from '@/features/budget';
 import { budgetStanding } from '@/features/budget/standing';
 import { reviewMessages } from '@/features/notifications/review-messages';
 import { ledger } from '@/features/transactions';
@@ -90,16 +90,19 @@ export async function syncMailbox(userId: string, { retryFailed = false } = {}) 
     const due = outcomes.filter((o) =>
       o.recorded ? o.recorded.created || !o.alreadyNotified : o.result.status === 'failed' && !o.alreadyNotified,
     );
-    // Categorised lines carry their category's budget this cycle. Uncategorised ones go to
-    // #needs-review, remembered so they can be ticked off once categorised.
-    const standing = await standingFor(userId);
+    // Categorised messages carry their category's emoji and budget this cycle. Uncategorised ones
+    // go to #needs-review, remembered so they can be ticked off once categorised.
+    const context = await discordContextFor(userId);
     for (const o of due) {
-      if (o.recorded && o.result.status === 'parsed') o.standing = standing(o.recorded.categoryId, o.result.transaction.occurredOn);
+      if (o.recorded && o.result.status === 'parsed') {
+        o.categoryEmoji = context.emoji(o.recorded.categoryId);
+        o.standing = context.standing(o.recorded.categoryId, o.result.transaction.occurredOn);
+      }
     }
     await postToDiscord(due, {
       onPosted: markNotified,
-      onReviewMessage: async (o, messageId, content) => {
-        if (o.recorded) await reviewMessages.record(userId, o.recorded.transactionId, messageId, content);
+      onReviewMessage: async (o, messageId, payload) => {
+        if (o.recorded) await reviewMessages.record(userId, o.recorded.transactionId, messageId, payload);
       },
     });
 
@@ -116,14 +119,18 @@ export async function syncMailbox(userId: string, { retryFailed = false } = {}) 
   }
 }
 
-// A failure here only costs the standing on Discord lines, never the sync.
-async function standingFor(userId: string) {
+// A failure here only costs the emoji and budget on Discord messages, never the sync.
+async function discordContextFor(userId: string) {
   try {
-    const summary = await budget.summary(userId);
-    return (categoryId: string | null, occurredOn: string) => budgetStanding(summary, categoryId, occurredOn);
+    const [summary, categories] = await Promise.all([budget.summary(userId), budgetRepo.listCategories(userId)]);
+    const emojiById = new Map(categories.map((c) => [c.id, c.emoji]));
+    return {
+      emoji: (categoryId: string | null) => (categoryId ? (emojiById.get(categoryId) ?? null) : null),
+      standing: (categoryId: string | null, occurredOn: string) => budgetStanding(summary, categoryId, occurredOn),
+    };
   } catch (err) {
-    console.error('budget standing unavailable for Discord lines', err);
-    return () => null;
+    console.error('budget standing unavailable for Discord messages', err);
+    return { emoji: () => null, standing: () => null };
   }
 }
 

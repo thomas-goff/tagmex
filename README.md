@@ -18,12 +18,13 @@ npm test        # unit tests (node:test via tsx)
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google Cloud "Desktop app" OAuth client |
 | `GMAIL_REFRESH_TOKEN` | from `npm run gmail:auth` |
 | `GMAIL_SENDER` | optional, default `notifyme@absa.co.za`; used as `from:` and matched against From |
-| `CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` | Clerk → API keys. Needed for `/api/mcp` only. `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` (the dashboard's name) works too |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` | Clerk → API keys. The dashboard sign-in and `/api/mcp`. The browser needs the `NEXT_PUBLIC_` name; `/api/mcp` also accepts `CLERK_PUBLISHABLE_KEY` |
 | `DISCORD_WEBHOOK_URL` | **#transactions**, and the fallback for the three below |
 | `DISCORD_REVIEW_WEBHOOK_URL` | optional, **#needs-review** |
 | `DISCORD_BUDGET_WEBHOOK_URL` | optional, **#budget** |
 | `DISCORD_SYSTEM_WEBHOOK_URL` | optional, **#system** |
 | `DISCORD_PING_USER_ID` | optional, your Discord user id: @-mentioned on critical #system messages only |
+| `DISCORD_AVATAR_URL` | optional, a public image URL: Pennyworth's avatar on every post (unset = each webhook's own) |
 
 ## Deploys and migrations
 
@@ -177,7 +178,9 @@ select source_ref, count(*) from transactions group by 1 having count(*) > 1;
 ## Budget + Claude (phase 3)
 
 Claude is the interface: it connects to the MCP server at `/api/mcp` and answers "where do I
-stand?" from the ledger. Discord gets a daily digest and alerts without you asking.
+stand?" from the ledger. Discord gets a daily digest and alerts without you asking, from
+Pennyworth, a butler who keeps Master Goff's books. The same numbers are on the dashboard at
+`/dashboard`, behind Clerk sign-in.
 
 ### How the budget works
 
@@ -190,6 +193,14 @@ stand?" from the ledger. Discord gets a daily digest and alerts without you aski
   and raises "salary overdue". A second salary-like credit within 20 days is income, not a cycle.
 - **Budget items**: one per expense category (created at R0 automatically), `static` (debit
   orders, with an expected day), `dynamic` or `irregular`, with an allocation per cycle.
+- **Status** per category: a static item paid in full is **settled**, never over budget, even if
+  the debit order cost more (that difference is noted, and a tip suggests updating the budget);
+  part-paid or unpaid static items are **pending**. Dynamic and irregular items are **on track**,
+  **warning** from 80% and **over** from 100%. Only dynamic and irregular items raise 80% / 100%
+  alerts.
+- **Emoji**: every category has one (`categories.emoji`, defaults from migration 0009; 🏷️ when
+  unset), shown on Discord and the dashboard. Change it on the dashboard or with
+  `set_category_emoji`.
 - **Numbers** are computed on read, never stored: spent per category (refunds net off), remaining,
   pending debit orders (static items with no money out yet), discretionary left (dynamic +
   irregular), daily allowance, income and net. Transfers count as neither. Uncategorised
@@ -201,22 +212,26 @@ stand?" from the ledger. Discord gets a daily digest and alerts without you aski
 |---|---|
 | `src/features/cycle/` | Pure: dates in SAST, SA holidays, salary detection, cycle boundaries |
 | `src/features/budget/` | Pure maths (`summary`, `trend`, `tips`), repo (cents at the boundary), `service.ts` (the one service layer) |
+| `src/features/commands/` | The writes (categorise, budgets, emoji, salary, notifications, exclude), shared by the MCP tools and the dashboard |
 | `src/features/mcp/` | Clerk token check (`auth.ts`, `clerk.ts`), tool wrapper (`tool.ts`: rate limit, audit, errors), tools in `tools/read.ts` and `tools/write.ts` |
-| `src/features/notifications/` | Discord channels, digest and alert messages, claim-before-post dedupe, #needs-review edits, #system alerts |
+| `src/features/notifications/` | Discord channels, Pennyworth's embeds (`embeds.ts`), digest and alert messages, claim-before-post dedupe, #needs-review edits, #system alerts |
 | `src/app/api/mcp/` | The MCP endpoint (stateless streamable HTTP) |
 | `src/app/.well-known/` | OAuth protected resource metadata (points clients at Clerk) |
 | `src/app/api/digest/` | Hourly job: alerts, the daily digest, stale-sync check |
+| `src/app/dashboard/` | The signed-in dashboard: overview, transactions, budget, settings. Server Actions in `actions.ts` |
+| `src/proxy.ts`, `src/features/auth/session.ts` | Clerk session: the proxy redirects signed-out visits; `requireUser()` is the real check on every page and action |
 
 ### Discord channels
 
 | Channel | What | Webhook |
 |---|---|---|
-| #transactions | Each categorised transaction, with its category's budget this cycle | `DISCORD_WEBHOOK_URL` |
+| #transactions | Each categorised transaction: amount, merchant, category, its budget bar (or ✅ Settled) and days to payday | `DISCORD_WEBHOOK_URL` |
 | #needs-review | Each uncategorised transaction. Ticked ✅ with its category when you categorise it through Claude | `DISCORD_REVIEW_WEBHOOK_URL` |
 | #budget | Daily digest from 07:00 SAST, 80% / 100% category alerts, salary landed + last cycle recap, salary overdue | `DISCORD_BUDGET_WEBHOOK_URL` |
 | #system | Parse failures, sync / Gmail token failures (once a day per error, with a ping), no successful sync for 2h (ping), heartbeat, dry runs | `DISCORD_SYSTEM_WEBHOOK_URL` |
 
-Channels without a webhook fall back to #transactions. Set `DISCORD_REVIEW_WEBHOOK_URL` before
+Every message is an embed posted as **Pennyworth** (the webhook username). Channels without a
+webhook fall back to #transactions. Set `DISCORD_REVIEW_WEBHOOK_URL` before
 going live: a message can only be edited through the webhook that posted it, so review messages
 posted while it fell back won't get ticked off. Set notification levels per channel in
 Discord (e.g. #system on "@mentions only", so only the pings reach you). Every digest and alert is
@@ -235,8 +250,10 @@ deduplicated in `notifications_sent`, so retries never repeat one.
      documents), so Claude can register itself. The Clerk MCP connector's `configure_mcp_server`
      does this; `check_mcp_server` then checks discovery against the deployed app. If clients
      still can't register, enable **Dynamic client registration** under OAuth settings.
-   - *API keys*: copy the publishable and secret keys into Vercel (`CLERK_PUBLISHABLE_KEY`,
-     `CLERK_SECRET_KEY`) and `.env.local`.
+   - *API keys*: copy the publishable and secret keys into Vercel (`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`,
+     `CLERK_SECRET_KEY`) and `.env.local`. The dashboard signs in at `/sign-in` with the same
+     instance and the same allowlist as MCP; someone Clerk lets in but `app_users` doesn't gets
+     `/not-allowed`.
    - Only if a client can't get a token with the right audience: set `CLERK_SKIP_AUDIENCE_CHECK=true`
      (weaker: any token from this Clerk instance is accepted) and tell me, it's tech debt.
 3. **Allow yourself in** (the app's own allowlist, on top of Clerk's): the email must be one you
@@ -271,12 +288,13 @@ change: run `npm run users:allow -- --email you@example.com --unlink` and sign i
 Read: `get_budget_overview` (start here), `list_transactions`, `get_uncategorised`,
 `list_categories`, `list_accounts`, `get_budget_items`, `get_pending_debit_orders`,
 `get_spending_trend`, `get_tips`, `get_sync_status`. Write: `categorise_transaction` (learns a rule;
-over 25 similar rows needs `confirm: true`), `create_category`, `set_budget_item`,
+over 25 similar rows needs `confirm: true`), `create_category`, `set_category_emoji`, `set_budget_item`,
 `set_salary_config`, `set_notification_settings`, `exclude_transaction` / `restore_transaction`
 (soft delete), `set_account_label` (names an account such as `CHEQ …1297`, or the counterparty
 behind description text; shown next to transactions, display only), `post_status_to_discord`
 (the digest-style budget status and/or a note from Claude, to #budget; at most 5 posts an hour),
 `reprocess_failed_messages`. No hard deletes, no SQL, every query scoped to the signed-in user.
+The dashboard's forms run the same commands (`src/features/commands/`), with the same rules.
 Every call is written to `mcp_audit_log` (kept 90 days) and limited to 60 a minute.
 
 ### Checks (Supabase SQL editor)

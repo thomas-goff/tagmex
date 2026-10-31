@@ -1,11 +1,13 @@
 import type { CallToolResult, McpServer, ToolAnnotations } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { AccountLabelRepo } from '@/features/accounts/repo';
+import { CommandError, type CommandErrorCode } from '@/features/commands/commands';
 import type { BudgetRepo } from '@/features/budget/repo';
 import { ConflictError } from '@/features/budget/repo';
 import type { BudgetService } from '@/features/budget/service';
 import { InvalidInputError } from '@/features/budget/service';
 import type { DiscordChannel } from '@/features/notifications/discord';
+import type { DiscordPayload } from '@/features/notifications/embeds';
 import type { ReviewMessages } from '@/features/notifications/review';
 import type { CategoryCorrector } from '@/features/transactions/correct-category';
 import { NotFoundError } from '@/features/transactions/correct-category';
@@ -42,7 +44,7 @@ export interface ToolDeps {
   // #needs-review messages to tick off when their transactions are sorted.
   review: Pick<ReviewMessages, 'resolve'>;
   // Posts to a Discord channel's webhook; returns the message id.
-  discord: { post(channel: DiscordChannel, content: string): Promise<string> };
+  discord: { post(channel: DiscordChannel, payload: DiscordPayload): Promise<string> };
   // Re-parse failed bank emails (after a parser fix). Posts results to Discord like a normal sync.
   reprocessFailed(userId: string): Promise<{ fetched: number; parsed: number; ignored: number; failed: number }>;
 }
@@ -126,7 +128,17 @@ export async function runTool(tool: ToolDefinition, args: unknown, { principal, 
 
 const INTERNAL = 'Something went wrong on the tagmex server. Try once more; if it fails again, tell the user.';
 
+// Where to look next, for the model, after a shared command's error.
+const COMMAND_HINTS: Partial<Record<CommandErrorCode, string>> = {
+  unknown_category: ' Call list_categories, or create_category to add one.',
+  unknown_transaction: ' Find ids with list_transactions or get_uncategorised.',
+  excluded: ' (restore_transaction)',
+  nothing_to_change: ' Pass allocated, expense_type, expected_day or active.',
+  zero_salary: ' Pass expected_amount: null to accept any amount.',
+};
+
 function actionableMessage(err: unknown) {
+  if (err instanceof CommandError) return `${err.message}${COMMAND_HINTS[err.code] ?? ''}`;
   if (err instanceof ToolError || err instanceof InvalidInputError || err instanceof ConflictError) return err.message;
   if (err instanceof NotFoundError) return `${err.message}. Look the id up with list_transactions or list_categories.`;
   if (err instanceof z.ZodError) return `Invalid arguments: ${z.prettifyError(err)}`;

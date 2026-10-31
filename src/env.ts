@@ -17,6 +17,8 @@ const schema = z.object({
   // Your Discord user id (Developer Mode → right-click yourself → Copy User ID), @-mentioned on
   // critical #system messages only. Unset = no pings.
   DISCORD_PING_USER_ID: optional(z.string().regex(/^\d{5,25}$/, 'a numeric Discord user id')),
+  // Pennyworth's avatar on every post (a public image URL). Unset = each webhook's own avatar.
+  DISCORD_AVATAR_URL: optional(z.url()),
   CRON_SECRET: z.string().min(32),
 });
 

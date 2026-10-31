@@ -7,10 +7,11 @@ import {
   resolveAccount,
   type AccountLabelKind,
 } from '@/features/accounts/labels';
+import { parseEmoji } from '@/features/categorisation/emoji';
 import { EXPENSE_TYPES } from '@/features/categorisation/types';
-import { digestMessage } from '@/features/notifications/budget-messages';
-import { categoryLabel } from '@/features/sync/format';
-import { findCategory } from '@/features/transactions/correct-category';
+import { digestPayload } from '@/features/notifications/budget-messages';
+import { BULK_CONFIRM_THRESHOLD, createCommands } from '@/features/commands/commands';
+import { claudeNoteEmbed, MASTER, payloadText, type DiscordEmbed } from '@/features/notifications/embeds';
 import { CURRENCY, money, parseAmount, rand, untrusted } from '../format';
 import { defineTool, ToolError, type ToolContext } from '../tool';
 import { CYCLE_NOTE, MONEY_NOTE } from './read';
@@ -18,9 +19,12 @@ import { CYCLE_NOTE, MONEY_NOTE } from './read';
 // Small, reversible writes. Nothing here hard-deletes, takes SQL, or reaches another user's rows:
 // every call is scoped to the authenticated user by the service layer.
 
-// A learned rule touching more rows than this needs confirm: true, so one injected or mistaken call
-// can't recategorise a large part of the ledger.
-export const BULK_CONFIRM_THRESHOLD = 25;
+export { BULK_CONFIRM_THRESHOLD };
+
+const emojiInput = z
+  .string()
+  .transform((s, ctx) => parseEmoji(s) ?? (ctx.addIssue({ code: 'custom', message: 'must be a single emoji, e.g. 🛒' }), z.NEVER))
+  .describe('One emoji shown beside the category on Discord and the dashboard, e.g. 🛒.');
 
 const amountInput = z.union([z.number(), z.string()]).describe('Rands, e.g. 1500 or "1500.00".');
 const write = { readOnlyHint: false, destructiveHint: false, openWorldHint: false } as const;
@@ -33,25 +37,8 @@ function amountOrThrow(value: number | string, field: string) {
   }
 }
 
-// Zero would make every salary credit "outside tolerance" and silently stop cycles opening.
-function positiveSalary(value: number | string) {
-  const cents = amountOrThrow(value, 'expected_amount');
-  if (cents === 0) throw new ToolError('expected_amount must be more than R0; pass null to accept any amount.');
-  return cents;
-}
-
-async function categoryOrThrow({ principal, deps }: ToolContext, ref: string) {
-  const categories = await deps.ledger.stores.categories.listCategories(principal.userId);
-  const category = findCategory(categories, ref);
-  if (!category) throw new ToolError(`No category "${ref}". Call list_categories, or create_category to add one.`);
-  return category;
-}
-
-async function transactionOrThrow({ principal, deps }: ToolContext, id: string) {
-  const tx = await deps.repo.findTransaction(principal.userId, id);
-  if (!tx) throw new ToolError(`No transaction ${id}. Find ids with list_transactions or get_uncategorised.`);
-  return tx;
-}
+// The shared writes, run as the authenticated user.
+const commands = ({ deps }: ToolContext) => createCommands(deps);
 
 const categoriseTransaction = defineTool({
   name: 'categorise_transaction',
@@ -70,27 +57,19 @@ const categoriseTransaction = defineTool({
   }),
   annotations: { ...write, idempotentHint: true, title: 'Categorise a transaction' },
   async run(args, ctx) {
-    const { principal, deps } = ctx;
-    const tx = await transactionOrThrow(ctx, args.transaction_id);
-    if (tx.isDeleted) throw new ToolError('That transaction is excluded. Restore it with restore_transaction first.');
-    const category = await categoryOrThrow(ctx, args.category);
-
-    const similar = args.apply_to_similar ? await deps.ledger.corrector.findSimilar(principal.userId, tx.id) : [];
-    if (similar.length > BULK_CONFIRM_THRESHOLD && !args.confirm) {
+    const result = await commands(ctx).categorise(ctx.principal.userId, {
+      transactionId: args.transaction_id,
+      category: args.category,
+      applyToSimilar: args.apply_to_similar,
+      confirm: args.confirm,
+    });
+    const { tx, category } = result;
+    if (result.status === 'needs_confirmation') {
       return {
-        text: `This would also categorise ${similar.length} other uncategorised transactions described "${untrusted(tx.description)}" as ${category.name}. Nothing was changed. Ask the user, then call again with confirm: true (or apply_to_similar: false for just this one).`,
-        data: { requires_confirmation: true, would_also_change: similar.length, category: category.name, changed: 0 },
+        text: `This would also categorise ${result.wouldAlsoChange} other uncategorised transactions described "${untrusted(tx.description)}" as ${category.name}. Nothing was changed. Ask the user, then call again with confirm: true (or apply_to_similar: false for just this one).`,
+        data: { requires_confirmation: true, would_also_change: result.wouldAlsoChange, category: category.name, changed: 0 },
       };
     }
-
-    const result = await deps.ledger.corrector.correct({
-      userId: principal.userId,
-      transactionId: tx.id,
-      categoryId: category.id,
-      applyToSimilar: args.apply_to_similar,
-    });
-    // Tick them off in #needs-review.
-    await deps.review.resolve(principal.userId, [tx.id, ...similar], categoryLabel(category.name));
     return {
       text: `Categorised ${tx.occurredOn} ${rand(tx.amountCents)} "${untrusted(tx.description)}" as ${category.name}${result.appliedTo ? `, and ${result.appliedTo} similar uncategorised transaction${result.appliedTo === 1 ? '' : 's'}` : ''}. Future emails with this description will be ${category.name} too.`,
       data: {
@@ -119,17 +98,40 @@ const createCategory = defineTool({
     kind: z.enum(['expense', 'income']).default('expense'),
     expense_type: z.enum(EXPENSE_TYPES).default('dynamic'),
     allocated: amountInput.optional().describe('Per-cycle budget in rands (expense only).'),
+    emoji: emojiInput.optional(),
   }),
   annotations: { ...write, idempotentHint: false, title: 'Create a category' },
-  async run(args, { principal, deps }) {
-    if (args.kind === 'income' && args.allocated !== undefined) throw new ToolError('Only expense categories have a budget.');
+  async run(args, ctx) {
     const allocatedCents = args.allocated === undefined ? undefined : amountOrThrow(args.allocated, 'allocated');
-    const id = await deps.repo.createCategory(principal.userId, { name: args.name, kind: args.kind, expenseType: args.expense_type });
-    await deps.repo.ensureBudgetItems(principal.userId);
-    if (allocatedCents !== undefined) await deps.repo.updateBudgetItem(principal.userId, id, { allocatedCents });
+    const { id } = await commands(ctx).createCategory(ctx.principal.userId, {
+      name: args.name,
+      kind: args.kind,
+      expenseType: args.expense_type,
+      allocatedCents,
+      emoji: args.emoji,
+    });
     return {
-      text: `Created ${args.kind} category ${args.name}${args.kind === 'expense' ? ` (${args.expense_type}, budget ${rand(allocatedCents ?? 0)})` : ''}.`,
-      data: { category_id: id, name: args.name, kind: args.kind, expense_type: args.kind === 'expense' ? args.expense_type : null, allocated: args.kind === 'expense' ? money(allocatedCents ?? 0) : null },
+      text: `Created ${args.kind} category ${args.emoji ? `${args.emoji} ` : ''}${args.name}${args.kind === 'expense' ? ` (${args.expense_type}, budget ${rand(allocatedCents ?? 0)})` : ''}.`,
+      data: { category_id: id, name: args.name, emoji: args.emoji ?? null, kind: args.kind, expense_type: args.kind === 'expense' ? args.expense_type : null, allocated: args.kind === 'expense' ? money(allocatedCents ?? 0) : null },
+    };
+  },
+});
+
+const setCategoryEmoji = defineTool({
+  name: 'set_category_emoji',
+  title: 'Set a category emoji',
+  description:
+    'Sets the emoji shown beside a category in Discord messages and on the dashboard (any category, including income). emoji: null clears it back to the default 🏷️.',
+  input: z.object({
+    category: z.string().min(1).describe('Category name or id, from list_categories.'),
+    emoji: emojiInput.nullable(),
+  }),
+  annotations: { ...write, idempotentHint: true, title: 'Set a category emoji' },
+  async run(args, ctx) {
+    const category = await commands(ctx).setCategoryEmoji(ctx.principal.userId, args.category, args.emoji);
+    return {
+      text: args.emoji ? `${category.name} now shows as ${args.emoji}.` : `${category.name} is back to the default 🏷️.`,
+      data: { category_id: category.id, category: category.name, emoji: args.emoji },
     };
   },
 });
@@ -151,20 +153,12 @@ const setBudgetItem = defineTool({
   }),
   annotations: { ...write, idempotentHint: true, title: 'Set a budget item' },
   async run(args, ctx) {
-    const { principal, deps } = ctx;
-    if ([args.allocated, args.expense_type, args.expected_day, args.active].every((v) => v === undefined)) {
-      throw new ToolError('Nothing to change: pass allocated, expense_type, expected_day or active.');
-    }
-    const category = await categoryOrThrow(ctx, args.category);
-    if (category.kind !== 'expense') throw new ToolError(`${category.name} is a ${category.kind} category; only expense categories have a budget.`);
-    await deps.repo.ensureBudgetItems(principal.userId);
-    await deps.repo.updateBudgetItem(principal.userId, category.id, {
+    const line = await commands(ctx).setBudgetItem(ctx.principal.userId, args.category, {
       allocatedCents: args.allocated === undefined ? undefined : amountOrThrow(args.allocated, 'allocated'),
       expenseType: args.expense_type,
       expectedDay: args.expected_day,
       isActive: args.active,
     });
-    const line = (await deps.repo.listBudgetLines(principal.userId)).find((l) => l.categoryId === category.id)!;
     return {
       text: `${line.categoryName}: ${rand(line.allocatedCents)} per cycle, ${line.expenseType}${line.expectedDay ? `, debit order on day ${line.expectedDay}` : ''}${line.isActive ? '' : ', inactive'}.`,
       data: {
@@ -194,15 +188,13 @@ const setSalaryConfig = defineTool({
     tolerance_pct: z.number().int().min(0).max(100).optional(),
   }),
   annotations: { ...write, idempotentHint: true, title: 'Set salary details' },
-  async run(args, { principal, deps }) {
-    await deps.repo.updateSettings(principal.userId, {
+  async run(args, ctx) {
+    const { settings: s, cycle } = await commands(ctx).setSalaryConfig(ctx.principal.userId, {
       salaryDayHint: args.salary_day,
       expectedSalaryCents:
-        args.expected_amount === undefined ? undefined : args.expected_amount === null ? null : positiveSalary(args.expected_amount),
+        args.expected_amount === undefined ? undefined : args.expected_amount === null ? null : amountOrThrow(args.expected_amount, 'expected_amount'),
       salaryTolerancePct: args.tolerance_pct,
     });
-    const s = await deps.repo.getSettings(principal.userId);
-    const { cycle } = await deps.budget.summary(principal.userId);
     return {
       text: `Salary due on day ${s.salaryDayHint}, ${s.expectedSalaryCents === null ? 'any amount' : `about ${rand(s.expectedSalaryCents)} ±${s.salaryTolerancePct}%`}. Current cycle: ${cycle.label}, next salary ${cycle.end}${cycle.endIsProjected ? ' (projected)' : ''}.`,
       data: {
@@ -227,13 +219,12 @@ const setNotificationSettings = defineTool({
     alerts_enabled: z.boolean().optional(),
   }),
   annotations: { ...write, idempotentHint: true, title: 'Set Discord notifications' },
-  async run(args, { principal, deps }) {
-    await deps.repo.updateSettings(principal.userId, {
+  async run(args, ctx) {
+    const s = await commands(ctx).setNotificationSettings(ctx.principal.userId, {
       digestEnabled: args.digest_enabled,
       digestHour: args.digest_hour,
       discordAlertsEnabled: args.alerts_enabled,
     });
-    const s = await deps.repo.getSettings(principal.userId);
     return {
       text: `Digest ${s.digestEnabled ? `on, from ${String(s.digestHour).padStart(2, '0')}:00` : 'off'}; alerts ${s.discordAlertsEnabled ? 'on' : 'off'}.`,
       data: { digest_enabled: s.digestEnabled, digest_hour: s.digestHour, alerts_enabled: s.discordAlertsEnabled, timezone: s.timezone },
@@ -251,9 +242,7 @@ const excludeTransaction = defineTool({
   input: excludeInput,
   annotations: { ...write, idempotentHint: true, title: 'Exclude a transaction' },
   async run({ transaction_id }, ctx) {
-    const tx = await transactionOrThrow(ctx, transaction_id);
-    await ctx.deps.repo.setExcluded(ctx.principal.userId, tx.id, true);
-    await ctx.deps.review.resolve(ctx.principal.userId, [tx.id], '🗑️ excluded');
+    const tx = await commands(ctx).exclude(ctx.principal.userId, transaction_id);
     return {
       text: `Excluded ${tx.occurredOn} ${rand(tx.amountCents)} "${untrusted(tx.description)}". restore_transaction undoes this.`,
       data: { transaction_id: tx.id, excluded: true },
@@ -268,8 +257,7 @@ const restoreTransaction = defineTool({
   input: excludeInput,
   annotations: { ...write, idempotentHint: true, title: 'Restore a transaction' },
   async run({ transaction_id }, ctx) {
-    const tx = await transactionOrThrow(ctx, transaction_id);
-    await ctx.deps.repo.setExcluded(ctx.principal.userId, tx.id, false);
+    const tx = await commands(ctx).restore(ctx.principal.userId, transaction_id);
     return {
       text: `Restored ${tx.occurredOn} ${rand(tx.amountCents)} "${untrusted(tx.description)}".`,
       data: { transaction_id: tx.id, excluded: false },
@@ -353,7 +341,6 @@ const setAccountLabel = defineTool({
 
 // Claude posting to Discord: a loop or an injected instruction can't flood the channel.
 export const DISCORD_POSTS_PER_HOUR = 5;
-const DISCORD_LIMIT = 1900;
 const NOTE_LIMIT = 1000;
 
 // Like untrusted(), but keeps line breaks: a note can be a few short lines.
@@ -387,17 +374,17 @@ const postStatusToDiscord = defineTool({
       throw new ToolError(`Already posted ${DISCORD_POSTS_PER_HOUR} times to Discord in the last hour. Nothing was posted; tell the user to try later.`);
     }
 
-    const parts = [`🤖 **From Claude**${note ? `\n${note}` : ''}`];
+    const embeds: DiscordEmbed[] = note ? [claudeNoteEmbed(note)] : [];
     if (args.include_budget) {
       const { summary, tips } = await deps.budget.overview(userId);
-      parts.push(digestMessage(summary, tips));
+      embeds.push(...(digestPayload(summary, tips, `📊 Budget status, ${MASTER}`).embeds ?? []));
     }
-    const joined = parts.join('\n\n');
-    const content = joined.length > DISCORD_LIMIT ? `${joined.slice(0, DISCORD_LIMIT - 1)}…` : joined;
+    const payload = { content: '🤖 **From Claude**', embeds };
+    const content = payloadText(payload);
 
     let messageId: string;
     try {
-      messageId = await deps.discord.post('budget', content);
+      messageId = await deps.discord.post('budget', payload);
     } catch (err) {
       console.error('MCP Discord post failed', err);
       throw new ToolError('Discord did not accept the post (the webhook may be missing or revoked). Nothing was posted; tell the user.');
@@ -428,6 +415,7 @@ const reprocessFailedMessages = defineTool({
 export const WRITE_TOOLS = [
   categoriseTransaction,
   createCategory,
+  setCategoryEmoji,
   setBudgetItem,
   setSalaryConfig,
   setNotificationSettings,

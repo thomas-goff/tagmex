@@ -56,11 +56,14 @@ export function categoriesJson(s: CycleSummary) {
   return s.categories.map((c) => ({
     category_id: c.categoryId,
     category: c.name,
+    emoji: c.emoji,
     type: c.expenseType,
     allocated: money(c.allocatedCents),
     spent: money(c.spentCents),
     remaining: money(c.remainingCents),
     used_pct: c.usedPct,
+    status: c.status,
+    difference: c.status === 'settled' ? money(c.differenceCents) : null,
     transactions: c.transactionCount,
     active: c.isActive,
   }));

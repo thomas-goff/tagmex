@@ -9,28 +9,30 @@ import type { CategoryKind, ExpenseType } from './types';
 
 export interface CategorySeed {
   name: string;
+  emoji: string;
   kind: CategoryKind;
   expenseType: ExpenseType | null;
   isSystem: boolean;
   isSalary?: boolean;
 }
 
+// Migration 0008 gives existing users the same emoji; keep the two in step.
 export const DEFAULT_CATEGORIES = [
-  { name: 'Groceries', kind: 'expense', expenseType: 'dynamic', isSystem: false },
-  { name: 'Petrol', kind: 'expense', expenseType: 'dynamic', isSystem: false },
-  { name: 'Rent / Bond', kind: 'expense', expenseType: 'static', isSystem: false },
-  { name: 'Utilities', kind: 'expense', expenseType: 'static', isSystem: false },
-  { name: 'Eating Out', kind: 'expense', expenseType: 'dynamic', isSystem: false },
-  { name: 'Entertainment', kind: 'expense', expenseType: 'dynamic', isSystem: false },
-  { name: 'Medical', kind: 'expense', expenseType: 'irregular', isSystem: false },
-  { name: 'Insurance', kind: 'expense', expenseType: 'static', isSystem: false },
-  { name: 'Clothing', kind: 'expense', expenseType: 'irregular', isSystem: false },
-  { name: 'Subscriptions', kind: 'expense', expenseType: 'static', isSystem: false },
-  { name: 'Personal Care', kind: 'expense', expenseType: 'dynamic', isSystem: false },
-  { name: 'Transport', kind: 'expense', expenseType: 'dynamic', isSystem: false },
-  { name: 'Salary', kind: 'income', expenseType: null, isSystem: false, isSalary: true },
-  { name: 'Income', kind: 'income', expenseType: null, isSystem: true },
-  { name: 'Transfer', kind: 'transfer', expenseType: null, isSystem: true },
+  { name: 'Groceries', emoji: '🛒', kind: 'expense', expenseType: 'dynamic', isSystem: false },
+  { name: 'Petrol', emoji: '⛽', kind: 'expense', expenseType: 'dynamic', isSystem: false },
+  { name: 'Rent / Bond', emoji: '🏠', kind: 'expense', expenseType: 'static', isSystem: false },
+  { name: 'Utilities', emoji: '💡', kind: 'expense', expenseType: 'static', isSystem: false },
+  { name: 'Eating Out', emoji: '🍔', kind: 'expense', expenseType: 'dynamic', isSystem: false },
+  { name: 'Entertainment', emoji: '🎬', kind: 'expense', expenseType: 'dynamic', isSystem: false },
+  { name: 'Medical', emoji: '💊', kind: 'expense', expenseType: 'irregular', isSystem: false },
+  { name: 'Insurance', emoji: '🛡️', kind: 'expense', expenseType: 'static', isSystem: false },
+  { name: 'Clothing', emoji: '👕', kind: 'expense', expenseType: 'irregular', isSystem: false },
+  { name: 'Subscriptions', emoji: '📺', kind: 'expense', expenseType: 'static', isSystem: false },
+  { name: 'Personal Care', emoji: '💈', kind: 'expense', expenseType: 'dynamic', isSystem: false },
+  { name: 'Transport', emoji: '🚌', kind: 'expense', expenseType: 'dynamic', isSystem: false },
+  { name: 'Salary', emoji: '💰', kind: 'income', expenseType: null, isSystem: false, isSalary: true },
+  { name: 'Income', emoji: '💵', kind: 'income', expenseType: null, isSystem: true },
+  { name: 'Transfer', emoji: '🔁', kind: 'transfer', expenseType: null, isSystem: true },
 ] as const satisfies readonly CategorySeed[];
 
 export type DefaultCategoryName = (typeof DEFAULT_CATEGORIES)[number]['name'];
