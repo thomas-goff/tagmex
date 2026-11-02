@@ -453,16 +453,16 @@ describe('post_status_to_discord', () => {
     assert.equal(posts.length, 2);
     const [channel, content] = posts[0]!;
     assert.equal(channel, 'budget');
-    assert.match(content, /^🤖 \*\*From Claude\*\*\nSorted 12 transactions \.\n\nAll caught up\.\n.*\n📊 Budget status, Master Goff/);
+    assert.match(content, /^🤖 \*\*From Claude\*\*\nSorted 12 transactions \.\n\nAll caught up\.\n📊 Budget status/);
     assert.equal(posts[1]![0], 'budget');
-    assert.match(posts[1]![1], /Salary & debit orders[\s\S]*Salary arrives in \*\*25 days\*\*/);
+    assert.match(posts[1]![1], /Payday & debit orders\nNext payday \*\*[^*]+\*\*, in 25 days/);
     assert.deepEqual((res.structuredContent as { message_ids: string[] }).message_ids, ['msg_1', 'msg_1']);
     assert.equal((res.structuredContent as { message_id: string }).message_id, 'msg_1');
 
     const noteOnly = await runTool(tool('post_status_to_discord'), { note: 'Rent is paid.', include_budget: false }, { principal, deps });
     assert.equal(noteOnly.isError, undefined);
     assert.equal(posts.length, 3);
-    assert.match(posts[2]![1], /^🤖 \*\*From Claude\*\*\nRent is paid\.\n[^\n]*Relayed on request$/);
+    assert.match(posts[2]![1], /^🤖 \*\*From Claude\*\*\nRent is paid\.$/);
   });
 
   test('nothing to post, the hourly cap, and a failing webhook are isError results that post nothing', async () => {

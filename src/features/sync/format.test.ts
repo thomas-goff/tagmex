@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import type { ParsedTransaction } from '@/features/bank-email/types';
 import type { BudgetStanding } from '@/features/budget/standing';
-import { embedLength, LIMITS, payloadText } from '@/features/notifications/embeds';
+import { COLOURS, embedLength, LIMITS, payloadText } from '@/features/notifications/embeds';
 import { resolvedReviewContent, resolvedReviewMessage } from '@/features/notifications/review';
 import { backlogPayload, emailPayload } from './email-payload';
 import { channelFor, type NotifiableEmail } from './format';
@@ -54,39 +54,24 @@ describe('channels', () => {
 });
 
 describe('transaction message', () => {
-  test('amount, merchant and category inline, then the budget bar and payday', () => {
+  test('the amount as the title, then merchant and category, then the budget; payday stays in the digest', () => {
     const embed = emailPayload({ ...parsed('WOOLWORTHS', -245_50, 'Groceries', '🛒'), standing: groceries }).embeds![0]!;
-    assert.match(embed.title!, /Master Goff$/);
-    assert.deepEqual(
-      embed.fields!.map((f) => [f.name, f.value, f.inline]),
-      [
-        ['💳 Amount', 'R245.50', true],
-        ['🏪 Merchant', 'WOOLWORTHS', true],
-        ['🏷️ Category', '🛒 Groceries', true],
-        ['🛒 Groceries budget', '█████░░░░░ 54% used\n**R1,830.00** left of R4,000.00', false],
-        ['📅 Payday', 'Salary arrives in **6 days**', false],
-      ],
-    );
-    assert.match(embed.footer!.text, /card · acc 1234 · 2026-11-01/);
+    assert.equal(embed.title, '🧾 R245.50');
+    assert.equal(embed.description, '**WOOLWORTHS** · 🛒 Groceries\n`█████░░░░░` 54% · R1,830.00 left of R4,000.00');
+    assert.equal(embed.fields, undefined);
+    assert.equal(embed.footer!.text, 'card · acc 1234 · Sun 1 Nov');
   });
 
-  test('the same transaction always gets the same wording', () => {
-    const a = emailPayload(parsed('WOOLWORTHS', -100, 'Groceries')).embeds![0]!;
-    const b = emailPayload(parsed('WOOLWORTHS', -100, 'Groceries')).embeds![0]!;
-    assert.deepEqual([a.title, a.description], [b.title, b.description]);
-  });
-
-  test('money in is a deposit; bank text is escaped', () => {
+  test('money in; bank text is escaped and kept out of the title', () => {
     const embed = emailPayload(parsed('PAY*ME_NOW', 500_00, 'Income')).embeds![0]!;
-    assert.match(embed.title!, /deposit|Money in/);
-    assert.equal(embed.fields![1]!.value, 'PAY\\*ME\\_NOW');
-    assert.equal(embed.fields![2]!.value, '🏷️ Income');
+    assert.equal(embed.title, '💰 R500.00');
+    assert.equal(embed.description, '**PAY\\*ME\\_NOW** · 🏷️ Income');
   });
 
   test('uncategorised goes out as a review message', () => {
     const embed = emailPayload(parsed('CORNER SHOP', -500, null)).embeds![0]!;
-    assert.match(embed.title!, /unfamiliar/);
-    assert.equal(embed.fields![2]!.value, '❔ Uncategorised');
+    assert.equal(embed.title, '🧐 R5.00');
+    assert.match(embed.description!, /^\*\*CORNER SHOP\*\* · ❔ needs a category\n/);
   });
 
   test('a dry-run prefix goes in the message text', () => {
@@ -100,8 +85,20 @@ describe('review messages', () => {
     const resolved = resolvedReviewMessage(stored, '🛒 Groceries');
     assert.ok(typeof resolved !== 'string');
     const embed = resolved.embeds![0]!;
+    assert.equal(embed.title, '✅ R5.00');
+    assert.equal(embed.description, '**CORNER SHOP** · 🛒 Groceries');
+    assert.equal(embed.color, COLOURS.green);
+  });
+
+  test('a review embed from before the trim keeps its fields and gets the outcome in its category field', () => {
+    const stored = JSON.stringify({
+      embeds: [{ title: '🧐 An unfamiliar transaction, Master Goff', fields: [{ name: '💳 Amount', value: 'R5.00' }, { name: '🏷️ Category', value: '❔ Uncategorised' }] }],
+    });
+    const resolved = resolvedReviewMessage(stored, '🗑️ excluded');
+    assert.ok(typeof resolved !== 'string');
+    const embed = resolved.embeds![0]!;
     assert.match(embed.title!, /^✅ Sorted/);
-    assert.equal(embed.fields!.find((f) => f.name === '🏷️ Category')!.value, '🛒 Groceries');
+    assert.deepEqual(embed.fields!.map((f) => f.value), ['R5.00', '🗑️ excluded']);
   });
 
   test('a plain-text row from before embeds is ticked off the old way', () => {
@@ -121,7 +118,7 @@ describe('backlog message', () => {
       parsed('SALARY', 100_00, 'Income', '💵'),
     ];
     const embed = backlogPayload(items).embeds![0]!;
-    assert.equal(embed.title, '📥 5 transactions, Master Goff');
+    assert.equal(embed.title, '📥 5 transactions');
     const [totals, counts] = embed.description!.split('\n');
     assert.equal(totals, 'Out R4.00 · in R100.00');
     assert.equal(counts, '🛒 Groceries 2 · 💵 Income 1 · ⛽ Petrol 1 · ❔ Uncategorised 1');

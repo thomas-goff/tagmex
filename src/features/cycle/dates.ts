@@ -79,3 +79,11 @@ const MONTHS = [
 export function monthName(month: number) {
   return MONTHS[month - 1]!;
 }
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// "Mon 2 Nov".
+export function shortDate(iso: string) {
+  const { day, month } = parts(iso);
+  return `${WEEKDAYS[dayOfWeek(iso)]} ${day} ${monthName(month).slice(0, 3)}`;
+}

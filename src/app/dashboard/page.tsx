@@ -3,7 +3,7 @@ import { requireUser } from '@/features/auth/session';
 import { budget } from '@/features/budget';
 import { isIsoDate } from '@/features/cycle/dates';
 import { categoryEmoji } from '@/features/categorisation/emoji';
-import { shortDate } from '@/features/notifications/budget-messages';
+import { shortDate } from '@/features/cycle/dates';
 import { formatRand } from '@/features/sync/format';
 import styles from './dashboard.module.css';
 import { CategoryCard, cx, paydayLabel, Stat } from './ui';
