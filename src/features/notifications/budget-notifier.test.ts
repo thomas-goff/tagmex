@@ -5,8 +5,8 @@ import type { BudgetService } from '@/features/budget/service';
 import { DEFAULT_SETTINGS } from '@/features/budget/types';
 import type { BudgetLine, LedgerRow } from '@/features/budget/types';
 import { cycleContaining, cycleStatus, previousCycle } from '@/features/cycle/cycle';
-import { budgetAlerts, digestPayload, thresholdKey } from './budget-messages';
-import { embedLength, payloadText } from './embeds';
+import { budgetAlerts, digestPayloads, thresholdKey } from './budget-messages';
+import { embedLength, fieldLines, LIMITS, payloadText } from './embeds';
 import { createBudgetNotifier } from './budget-notifier';
 import { createSystemAlerts, errorFingerprint } from './system-alerts';
 import { budgetStanding } from '@/features/budget/standing';
@@ -20,12 +20,14 @@ const spend = (cents: number): LedgerRow[] => [
   { id: 't', occurredOn: '2026-10-31', amountCents: -cents, categoryId: 'g', categoryKind: 'expense', categoryName: 'Groceries', categoryEmoji: '🛒' },
 ];
 
+const digestText = (s: CycleSummary, opts?: Parameters<typeof digestPayloads>[2]) => digestPayloads(s, [], opts).map(payloadText).join('\n\n');
+
 function summaryOn(today: string, rows: LedgerRow[]): CycleSummary {
   const cycle = cycleContaining(today, starts, 31);
   return summariseCycle({ cycle, status: cycleStatus(cycle, today, true), today, rows, lines });
 }
 
-function harness(over: { today?: string; rows?: LedgerRow[]; hourUtc?: number; failPosts?: number } = {}) {
+function harness(over: { today?: string; rows?: LedgerRow[]; hourUtc?: number; failPosts?: number; failCall?: number } = {}) {
   const today = over.today ?? '2026-11-10';
   const summary = summaryOn(today, over.rows ?? []);
   const prior = previousCycle(summary.cycle, starts, 31);
@@ -33,6 +35,7 @@ function harness(over: { today?: string; rows?: LedgerRow[]; hourUtc?: number; f
   const claimed = new Set<string>();
   const posts: { content: string; channel: string }[] = [];
   let failPosts = over.failPosts ?? 0;
+  let calls = 0;
   const notifier = createBudgetNotifier({
     budget: { overview: async () => ({ summary, previous, tips: [] }) } as unknown as Pick<BudgetService, 'overview'>,
     getSettings: async () => DEFAULT_SETTINGS,
@@ -47,7 +50,8 @@ function harness(over: { today?: string; rows?: LedgerRow[]; hourUtc?: number; f
       },
     },
     async post(message, channel) {
-      if (failPosts-- > 0) throw new Error('Discord 500');
+      calls++;
+      if (failPosts-- > 0 || calls === over.failCall) throw new Error('Discord 500');
       posts.push({ content: payloadText(message), channel });
     },
     // 07:30 SAST by default, past the 07:00 digest hour.
@@ -58,27 +62,38 @@ function harness(over: { today?: string; rows?: LedgerRow[]; hourUtc?: number; f
 }
 
 describe('budget notifier', () => {
-  test('running twice posts the digest once', async () => {
+  test('running twice posts the digest once, as two messages: budgets, then debit orders', async () => {
     const { notifier, posts } = harness();
     const first = await notifier.run('owner', { digest: true });
     const second = await notifier.run('owner', { digest: true });
     assert.equal(first.digest?.status, 'sent');
     assert.equal(second.digest?.status, 'already_sent');
-    assert.deepEqual(posts.map((p) => p.channel), ['budget']);
+    assert.deepEqual(posts.map((p) => p.channel), ['budget', 'budget']);
+    assert.match(posts[0]!.content, /Good morning[\s\S]*📊 Budgets/);
+    assert.doesNotMatch(posts[0]!.content, /Insurance/);
+    assert.match(posts[1]!.content, /Salary & debit orders[\s\S]*💰 Salary: \*\*R30,713\.54\*\* landed Fri 30 Oct[\s\S]*🛡️ Insurance R900\.00/);
   });
 
   test('before digest_hour the digest waits; force sends it', async () => {
     const { notifier, posts } = harness({ hourUtc: 3 }); // 05:30 SAST
     assert.equal((await notifier.run('owner', { digest: true })).digest?.status, 'not_due');
     assert.equal((await notifier.run('owner', { digest: true, force: true })).digest?.status, 'sent');
-    assert.equal(posts.length, 1);
+    assert.equal(posts.length, 2);
   });
 
   test('a failed post gives its claim back, so the next run retries it', async () => {
     const { notifier, posts } = harness({ failPosts: 1 });
     assert.equal((await notifier.run('owner', { digest: true })).digest?.status, 'failed');
     assert.equal((await notifier.run('owner', { digest: true })).digest?.status, 'sent');
+    assert.equal(posts.length, 2);
+  });
+
+  test('if the debit orders message fails the budgets one stays up and is not posted again', async () => {
+    const { notifier, posts } = harness({ failCall: 2 });
+    assert.equal((await notifier.run('owner', { digest: true })).digest?.status, 'partial');
+    assert.equal((await notifier.run('owner', { digest: true })).digest?.status, 'already_sent');
     assert.equal(posts.length, 1);
+    assert.match(posts[0]!.content, /Good morning/);
   });
 
   test('crossing a threshold alerts exactly once; jumping past 80% skips the 80% alert', async () => {
@@ -218,30 +233,41 @@ describe('budget messages', () => {
       ...spend(200_00),
       { id: 'u', occurredOn: '2026-11-02', amountCents: -72_00, categoryId: null, categoryKind: null, categoryName: null, categoryEmoji: null },
     ]);
-    const payload = digestPayload(s, []);
-    const text = payloadText(payload);
-    assert.match(text, /Salary arrives in \*\*20 days\*\* \(Mon 30 Nov\)/);
+    const payloads = digestPayloads(s, []);
+    const text = payloads.map(payloadText).join('\n\n');
+    assert.match(payloadText(payloads[1]), /Salary arrives in \*\*20 days\*\*\nexpected Mon 30 Nov/);
     assert.match(text, /\*\*R40\.00\/day\*\* · R800\.00 left/);
     assert.match(text, /🛒 Groceries `██░░░░░░` 20% · R800\.00 left/);
-    assert.match(text, /🛡️ Insurance R900\.00 · \*\*late\*\*, Sun 1 Nov/);
-    assert.match(text, /1 transaction \(-R72\.00\)/);
-    assert.ok(embedLength(payload.embeds![0]!) < 6000);
+    assert.match(payloadText(payloads[1]), /🛡️ Insurance R900\.00 · \*\*late\*\*, Sun 1 Nov/);
+    assert.match(payloadText(payloads[0]), /1 transaction \(-R72\.00\)/);
+    for (const p of payloads) assert.ok(embedLength(p.embeds![0]!) < 6000);
   });
 
-  test('digest lists settled debit orders apart from the budgets', () => {
+  test('paid debit orders go in the debit orders message, with salary and committed totals', () => {
     const s = summaryOn('2026-11-10', [
       { id: 'ins', occurredOn: '2026-11-01', amountCents: -900_00, categoryId: 'i', categoryKind: 'expense', categoryName: 'Insurance', categoryEmoji: '🛡️' },
     ]);
-    const text = payloadText(digestPayload(s, []));
-    assert.match(text, /✅ Settled: 🛡️ Insurance/);
-    assert.doesNotMatch(text, /Debit orders to come/);
+    const [budgets, debits] = digestPayloads(s, []).map(payloadText);
+    assert.doesNotMatch(budgets!, /Insurance/);
+    assert.match(debits!, /✅ Paid · R900\.00: 🛡️ Insurance R900\.00/);
+    assert.match(debits!, /🔒 Committed: R900\.00 in fixed items · R900\.00 paid · R0\.00 to come/);
+    assert.match(debits!, /🗓️ To come: Nothing left to go off/);
+  });
+
+  test('a long budget list ends in "…and N more", never a line cut in half', () => {
+    const many = Array.from({ length: 40 }, (_, i) => `🛒 Category number ${i} \`████░░░░\` 50% · R1,000.00 left`);
+    const value = fieldLines(many);
+    assert.ok(value.length <= LIMITS.fieldValue);
+    assert.match(value, /\n…and \d+ more$/);
+    for (const line of value.split('\n').slice(0, -1)) assert.ok(many.includes(line));
+    assert.equal(fieldLines(['a', 'b']), 'a\nb');
   });
 
   test("digest sums up yesterday's money out", () => {
     const groceries = (id: string, occurredOn: string, amountCents: number): LedgerRow => ({ id, occurredOn, amountCents, categoryId: 'g', categoryKind: 'expense', categoryName: 'Groceries', categoryEmoji: '🛒' });
     const busy = summaryOn('2026-11-10', [groceries('a', '2026-11-09', -150_00), groceries('b', '2026-11-09', -100_00), groceries('c', '2026-11-08', -40_00)]);
-    assert.match(payloadText(digestPayload(busy, [])), /🧾 Yesterday \(Mon 9 Nov\): R250\.00 out across 2 transactions/);
-    assert.match(payloadText(digestPayload(summaryOn('2026-11-10', []), [])), /🧾 Yesterday \(Mon 9 Nov\): Nothing went out, sir\./);
+    assert.match(digestText(busy), /🧾 Yesterday \(Mon 9 Nov\): R250\.00 out across 2 transactions/);
+    assert.match(digestText(summaryOn('2026-11-10', [])), /🧾 Yesterday \(Mon 9 Nov\): Nothing went out, sir\./);
 
     // Payday morning: yesterday is in the cycle that just ended.
     const today = '2026-10-30';
@@ -249,6 +275,6 @@ describe('budget messages', () => {
     const prior = previousCycle(fresh.cycle, starts, 31);
     const previous = summariseCycle({ cycle: prior, status: cycleStatus(prior, today, false), today, rows: [groceries('d', '2026-10-29', -60_00)], lines });
     assert.equal(fresh.yesterday, null);
-    assert.match(payloadText(digestPayload(fresh, [], { previous })), /🧾 Yesterday \(Thu 29 Oct\): R60\.00 out across 1 transaction\b/);
+    assert.match(digestText(fresh, { previous }), /🧾 Yesterday \(Thu 29 Oct\): R60\.00 out across 1 transaction\b/);
   });
 });

@@ -290,32 +290,68 @@ export function backlogEmbed(items: TransactionInfo[], failed: number, extra?: s
 
 // ── Budget ───────────────────────────────────────────────────────────────────────────────────────
 
+// The daily digest is two messages: the spending budgets, then salary and debit orders. One embed
+// held both until it grew past what Discord shows cleanly.
+
+type DigestCategory = Pick<
+  CategoryLine,
+  'name' | 'emoji' | 'expenseType' | 'allocatedCents' | 'spentCents' | 'remainingCents' | 'usedPct' | 'status' | 'isActive' | 'differenceCents'
+>;
+
 export interface DigestInput {
   dateLabel: string;
   cycleLabel: string;
-  payday: Payday;
-  paydayDateLabel: string;
   discretionaryLeftCents: number;
   dailyAllowanceCents: number | null;
   spentCents: number;
   allocatedCents: number;
-  categories: Pick<CategoryLine, 'name' | 'emoji' | 'expenseType' | 'allocatedCents' | 'spentCents' | 'remainingCents' | 'usedPct' | 'status' | 'isActive'>[];
-  pending: { name: string; emoji: string | null; allocatedCents: number; dueLabel: string | null; late: boolean }[];
-  pendingTotalCents: number;
+  categories: DigestCategory[];
   uncategorised: { count: number; outCents: number };
   tips: string[];
   yesterday: { dateLabel: string; outCents: number; count: number } | null;
 }
 
+export interface DebitOrdersInput {
+  cycleLabel: string;
+  payday: Payday;
+  paydayDateLabel: string;
+  paydayProjected: boolean;
+  salary: { amountCents: number; landedLabel: string } | null;
+  incomeCents: number;
+  netCents: number;
+  categories: DigestCategory[];
+  pending: { name: string; emoji: string | null; allocatedCents: number; dueLabel: string | null; late: boolean }[];
+  pendingTotalCents: number;
+}
+
+// Lines joined into one field value. Whole lines only: a line cut in half breaks its markdown, so
+// what doesn't fit becomes "…and N more".
+export function fieldLines(lines: string[], limit: number = LIMITS.fieldValue) {
+  const out: string[] = [];
+  let used = 0;
+  for (const [i, line] of lines.entries()) {
+    const sep = out.length > 0 ? 1 : 0;
+    // Room for the "…and N more" that would follow this line.
+    const more = i < lines.length - 1 ? `\n…and ${lines.length - i - 1} more`.length : 0;
+    if (used + sep + line.length + more > limit) {
+      out.push(`…and ${lines.length - i} more`);
+      break;
+    }
+    out.push(line);
+    used += sep + line.length;
+  }
+  return out.join('\n');
+}
+
 function digestColour(d: DigestInput) {
-  if (d.payday.salaryOverdue || d.categories.some((c) => c.status === 'over')) return COLOURS.red;
-  if (d.categories.some((c) => c.status === 'warning') || d.pending.some((p) => p.late)) return COLOURS.amber;
+  if (d.categories.some((c) => c.status === 'over')) return COLOURS.red;
+  if (d.categories.some((c) => c.status === 'warning')) return COLOURS.amber;
   return COLOURS.green;
 }
 
+// Message one: what's left to spend and each spending budget.
 export function digestEmbed(d: DigestInput, title = `☀️ Good morning, ${MASTER}`): DiscordEmbed {
   const fields = [
-    field('📅 Payday', `${paydayText(d.payday)}${d.payday.salaryOverdue ? ` (was due ${d.paydayDateLabel})` : ` (${d.paydayDateLabel})`}`, true),
     field(
       '🧮 To spend',
       `${d.dailyAllowanceCents === null ? '' : `**${formatRand(d.dailyAllowanceCents)}/day** · `}${formatRand(d.discretionaryLeftCents)} left`,
@@ -329,37 +365,80 @@ export function digestEmbed(d: DigestInput, title = `☀️ Good morning, ${MAST
   }
 
   const budgets = d.categories
-    .filter((c) => c.isActive && c.allocatedCents > 0 && c.status !== 'settled' && c.expenseType !== 'static')
+    .filter((c) => c.isActive && c.allocatedCents > 0 && c.expenseType !== 'static')
     .map((c) => {
       const tail = c.status === 'over' ? `**${formatRand(-c.remainingCents)} over**` : `${formatRand(c.remainingCents)} left`;
       return `${categoryEmoji(c.emoji)} ${escapeMarkdown(c.name)} \`${bar(c.usedPct ?? 0, 8)}\` ${c.usedPct}% · ${tail}`;
     });
-  if (budgets.length > 0) fields.push(field('📊 Budgets', budgets.join('\n')));
+  if (budgets.length > 0) fields.push(field('📊 Budgets', fieldLines(budgets)));
 
-  const settled = d.categories.filter((c) => c.status === 'settled');
-  if (settled.length > 0) fields.push(field('✅ Settled', settled.map((c) => categoryTag(c.name, c.emoji)).join(', ')));
-
-  if (d.pending.length > 0) {
-    fields.push(
-      field(
-        `🗓️ Debit orders to come · ${formatRand(d.pendingTotalCents)}`,
-        d.pending
-          .map((p) => `${categoryTag(p.name, p.emoji)} ${formatRand(p.allocatedCents)}${p.dueLabel ? ` · ${p.late ? '**late**, ' : ''}${p.dueLabel}` : ''}`)
-          .join('\n'),
-      ),
-    );
-  }
   if (d.uncategorised.count > 0) {
     fields.push(field('❔ Uncategorised', `${plural(d.uncategorised.count, 'transaction')} (${formatRand(-d.uncategorised.outCents)}) await your word, sir. Ask Claude to sort them.`));
   }
-  if (d.tips.length > 0) fields.push(field('💡 A thought, sir', d.tips.map((t) => `• ${escapeMarkdown(t)}`).join('\n')));
+  if (d.tips.length > 0) fields.push(field('💡 A thought, sir', fieldLines(d.tips.map((t) => `• ${escapeMarkdown(t)}`))));
 
   return {
     title,
     description: `Your accounts for ${d.dateLabel} · ${d.cycleLabel} cycle`,
     color: digestColour(d),
     fields,
-    footer: footer('Daily report'),
+    footer: footer('Daily report', 'Budgets'),
+  };
+}
+
+// Message two: salary, then the fixed items: what's still to come and what has gone off.
+export function debitOrdersEmbed(d: DebitOrdersInput, title = `🗓️ Salary & debit orders, ${MASTER}`): DiscordEmbed {
+  const next = d.payday.salaryOverdue ? `was due ${d.paydayDateLabel}` : `${d.paydayProjected ? 'expected' : 'on'} ${d.paydayDateLabel}`;
+  const fields = [
+    field('💰 Salary', d.salary ? `**${formatRand(d.salary.amountCents)}** landed ${d.salary.landedLabel}` : 'None seen this cycle, sir.', true),
+    field('📅 Next salary', `${paydayText(d.payday)}\n${next}`, true),
+    field('📒 This cycle', `Income ${formatRand(d.incomeCents)}\nNet ${formatRand(d.netCents)}`, true),
+  ];
+
+  const fixed = d.categories.filter((c) => c.isActive && c.expenseType === 'static' && c.allocatedCents > 0);
+  const committed = fixed.reduce((sum, c) => sum + c.allocatedCents, 0);
+  const paid = fixed.filter((c) => c.spentCents > 0);
+  const paidCents = paid.reduce((sum, c) => sum + c.spentCents, 0);
+  if (fixed.length > 0) {
+    fields.push(field('🔒 Committed', `${formatRand(committed)} in fixed items · ${formatRand(paidCents)} paid · ${formatRand(d.pendingTotalCents)} to come`));
+  }
+
+  if (d.pending.length > 0) {
+    fields.push(
+      field(
+        `🗓️ To come · ${formatRand(d.pendingTotalCents)}`,
+        fieldLines(
+          d.pending.map(
+            (p) => `${categoryTag(p.name, p.emoji)} ${formatRand(p.allocatedCents)}${p.dueLabel ? ` · ${p.late ? '**late**, ' : ''}${p.dueLabel}` : ''}`,
+          ),
+        ),
+      ),
+    );
+  } else if (fixed.length > 0) {
+    fields.push(field('🗓️ To come', 'Nothing left to go off this cycle, sir.'));
+  }
+
+  if (paid.length > 0) {
+    fields.push(
+      field(
+        `✅ Paid · ${formatRand(paidCents)}`,
+        fieldLines(
+          paid.map((c) => {
+            const amount = c.status === 'settled' ? formatRand(c.spentCents) : `${formatRand(c.spentCents)} of ${formatRand(c.allocatedCents)}`;
+            const diff = c.status === 'settled' && c.differenceCents ? ` (${formatRand(Math.abs(c.differenceCents))} ${c.differenceCents > 0 ? 'more' : 'less'})` : '';
+            return `${categoryTag(c.name, c.emoji)} ${amount}${diff}`;
+          }),
+        ),
+      ),
+    );
+  }
+
+  return {
+    title,
+    description: `${d.cycleLabel} cycle`,
+    color: d.payday.salaryOverdue ? COLOURS.red : d.pending.some((p) => p.late) ? COLOURS.amber : COLOURS.blue,
+    fields,
+    footer: footer('Daily report', 'Debit orders'),
   };
 }
 

@@ -449,16 +449,20 @@ describe('post_status_to_discord', () => {
     const { deps, posts } = withDiscord(async () => 'msg_1');
     const res = await runTool(tool('post_status_to_discord'), { note: 'Sorted 12 transactions\u0000\u202e.\n\n\n\nAll caught up.' }, { principal, deps });
     assert.equal(res.isError, undefined, textOf(res));
-    assert.equal(posts.length, 1);
+    // Budgets with the note, then salary and debit orders as a second message.
+    assert.equal(posts.length, 2);
     const [channel, content] = posts[0]!;
     assert.equal(channel, 'budget');
     assert.match(content, /^🤖 \*\*From Claude\*\*\nSorted 12 transactions \.\n\nAll caught up\.\n.*\n📊 Budget status, Master Goff/);
-    assert.match(content, /Salary arrives in \*\*25 days\*\*/);
+    assert.equal(posts[1]![0], 'budget');
+    assert.match(posts[1]![1], /Salary & debit orders[\s\S]*Salary arrives in \*\*25 days\*\*/);
+    assert.deepEqual((res.structuredContent as { message_ids: string[] }).message_ids, ['msg_1', 'msg_1']);
     assert.equal((res.structuredContent as { message_id: string }).message_id, 'msg_1');
 
     const noteOnly = await runTool(tool('post_status_to_discord'), { note: 'Rent is paid.', include_budget: false }, { principal, deps });
     assert.equal(noteOnly.isError, undefined);
-    assert.match(posts[1]![1], /^🤖 \*\*From Claude\*\*\nRent is paid\.\n[^\n]*Relayed on request$/);
+    assert.equal(posts.length, 3);
+    assert.match(posts[2]![1], /^🤖 \*\*From Claude\*\*\nRent is paid\.\n[^\n]*Relayed on request$/);
   });
 
   test('nothing to post, the hourly cap, and a failing webhook are isError results that post nothing', async () => {
@@ -475,7 +479,7 @@ describe('post_status_to_discord', () => {
     // Another user's posts don't count against this one.
     const otherUser = await runTool(tool('post_status_to_discord'), {}, { principal: other, deps });
     assert.equal(otherUser.isError, undefined);
-    assert.equal(posts.length, 1);
+    assert.equal(posts.length, 2);
 
     const broken = withDiscord(async () => {
       throw new Error('Discord webhook failed: 404');

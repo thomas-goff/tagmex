@@ -1,16 +1,19 @@
 import type { BudgetService } from '@/features/budget/service';
 import type { Settings } from '@/features/budget/types';
 import { hourIn } from '@/features/cycle/dates';
-import { budgetAlerts, digestPayload } from './budget-messages';
+import { budgetAlerts, digestPayloads } from './budget-messages';
 import type { NotificationClaims } from './claims';
 import type { DiscordChannel, DiscordMessage } from './discord';
-import { payloadText } from './embeds';
+import { payloadText, type DiscordPayload } from './embeds';
 
 // Posts the daily digest and budget alerts. Claim before post: a key is inserted first and the
 // message only goes out if this run inserted it, so retries and overlapping runs never duplicate.
 // A failed post gives its claim back for the next run, and never throws into the caller (the sync).
+// The digest is two messages under one claim: if the first fails nothing went out and the claim
+// goes back; if a later one fails the first is already up, so the claim stays (no duplicate) and
+// the status is 'partial'.
 
-export type NotificationStatus = 'sent' | 'already_sent' | 'failed' | 'disabled' | 'not_due' | 'preview';
+export type NotificationStatus = 'sent' | 'already_sent' | 'failed' | 'partial' | 'disabled' | 'not_due' | 'preview';
 
 export interface NotifierDeps {
   budget: Pick<BudgetService, 'overview'>;
@@ -31,14 +34,20 @@ export interface NotifyOptions {
 }
 
 export function createBudgetNotifier({ budget, getSettings, claims, post, now = () => new Date(), log = console }: NotifierDeps) {
-  async function send(userId: string, kind: string, key: string, message: DiscordMessage, channel: DiscordChannel, alsoClaim: string[] = []) {
+  async function send(userId: string, kind: string, key: string, messages: DiscordMessage[], channel: DiscordChannel, alsoClaim: string[] = []) {
     if (!(await claims.claim(userId, kind, key))) return 'already_sent' as const;
-    try {
-      await post(message, channel);
-    } catch (err) {
-      log.error(`Discord ${kind} post failed; will retry next run`, err);
-      await claims.release(userId, key).catch((e) => log.error('releasing notification claim failed', e));
-      return 'failed' as const;
+    for (const [i, message] of messages.entries()) {
+      try {
+        await post(message, channel);
+      } catch (err) {
+        if (i > 0) {
+          log.error(`Discord ${kind} post ${i + 1} of ${messages.length} failed; the rest are not retried`, err);
+          return 'partial' as const;
+        }
+        log.error(`Discord ${kind} post failed; will retry next run`, err);
+        await claims.release(userId, key).catch((e) => log.error('releasing notification claim failed', e));
+        return 'failed' as const;
+      }
     }
     for (const extra of alsoClaim) await claims.claim(userId, kind, extra);
     return 'sent' as const;
@@ -58,12 +67,12 @@ export function createBudgetNotifier({ budget, getSettings, claims, post, now = 
           ? 'disabled'
           : dryRun
             ? 'preview'
-            : await send(userId, alert.kind, alert.dedupeKey, alert.payload, 'budget', alert.alsoClaim);
+            : await send(userId, alert.kind, alert.dedupeKey, [alert.payload], 'budget', alert.alsoClaim);
         result.alerts.push({ key: alert.dedupeKey, kind: alert.kind, status, ...(dryRun ? { message: payloadText(alert.payload) } : {}) });
       }
 
       if (digest) {
-        const payload = digestPayload(summary, tips, { previous });
+        const payloads: DiscordPayload[] = digestPayloads(summary, tips, { previous });
         const due = force || hourIn(settings.timezone, now()) >= settings.digestHour;
         const status: NotificationStatus = !settings.digestEnabled
           ? 'disabled'
@@ -71,8 +80,8 @@ export function createBudgetNotifier({ budget, getSettings, claims, post, now = 
             ? 'preview'
             : !due
               ? 'not_due'
-              : await send(userId, 'digest', `digest:${summary.today}`, payload, 'budget');
-        result.digest = { status, ...(dryRun ? { message: payloadText(payload) } : {}) };
+              : await send(userId, 'digest', `digest:${summary.today}`, payloads, 'budget');
+        result.digest = { status, ...(dryRun ? { message: payloads.map(payloadText).join('\n\n') } : {}) };
       }
       return result;
     },

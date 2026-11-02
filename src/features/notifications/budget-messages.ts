@@ -3,7 +3,7 @@ import { isOverspent, type CycleSummary } from '@/features/budget/summary';
 import type { Tip } from '@/features/budget/tips';
 import { dayOfWeek, daysBetween, monthName, parts } from '@/features/cycle/dates';
 import { escapeMarkdown, formatRand } from '@/features/sync/format';
-import { digestEmbed, salaryLandedEmbed, salaryOverdueEmbed, thresholdEmbed, type DiscordPayload } from './embeds';
+import { debitOrdersEmbed, digestEmbed, salaryLandedEmbed, salaryOverdueEmbed, thresholdEmbed, type DiscordPayload } from './embeds';
 
 // What the budget posts to Discord, as pure functions of the summary. Discord stays one-way: Claude
 // is where you ask follow-up questions.
@@ -18,42 +18,53 @@ export function shortDate(iso: string) {
   return `${WEEKDAYS[dayOfWeek(iso)]} ${day} ${monthName(month).slice(0, 3)}`;
 }
 
-// On a cycle's first day, yesterday is in the previous cycle's summary.
-export function digestPayload(s: CycleSummary, tips: Tip[], { title, previous }: { title?: string; previous?: CycleSummary | null } = {}): DiscordPayload {
+// The daily digest, as two messages: budgets, then salary and debit orders. On a cycle's first day,
+// yesterday is in the previous cycle's summary. `title` replaces the first message's title.
+export function digestPayloads(
+  s: CycleSummary,
+  tips: Tip[],
+  { title, previous }: { title?: string; previous?: CycleSummary | null } = {},
+): [budgets: DiscordPayload, debitOrders: DiscordPayload] {
   const yesterday = s.yesterday ?? previous?.yesterday ?? null;
-  return {
-    embeds: [
-      digestEmbed(
-        {
-          dateLabel: shortDate(s.today),
-          cycleLabel: s.cycle.label,
-          payday: paydayOf(s),
-          paydayDateLabel: shortDate(s.cycle.end),
-          discretionaryLeftCents: s.discretionaryLeftCents,
-          dailyAllowanceCents: s.dailyAllowanceCents,
-          spentCents: s.spentCents,
-          allocatedCents: s.allocatedCents,
-          yesterday: yesterday && { dateLabel: shortDate(yesterday.date), outCents: yesterday.outCents, count: yesterday.count },
-          categories: s.categories,
-          pending: s.pendingDebitOrders.map((p) => ({
-            name: p.name,
-            emoji: s.categories.find((c) => c.categoryId === p.categoryId)?.emoji ?? null,
-            allocatedCents: p.allocatedCents,
-            dueLabel: p.expectedOn ? shortDate(p.expectedOn) : null,
-            late: p.late,
-          })),
-          pendingTotalCents: s.pendingTotalCents,
-          uncategorised: s.uncategorised,
-          // The uncategorised and overdue tips have their own fields.
-          tips: tips
-            .filter((t) => t.code !== 'uncategorised' && t.code !== 'salary_overdue')
-            .slice(0, 2)
-            .map((t) => t.message),
-        },
-        title,
-      ),
-    ],
-  };
+  const budgets = digestEmbed(
+    {
+      dateLabel: shortDate(s.today),
+      cycleLabel: s.cycle.label,
+      discretionaryLeftCents: s.discretionaryLeftCents,
+      dailyAllowanceCents: s.dailyAllowanceCents,
+      spentCents: s.spentCents,
+      allocatedCents: s.allocatedCents,
+      yesterday: yesterday && { dateLabel: shortDate(yesterday.date), outCents: yesterday.outCents, count: yesterday.count },
+      categories: s.categories,
+      uncategorised: s.uncategorised,
+      // The uncategorised and overdue tips have their own fields; late debit orders are in the
+      // second message.
+      tips: tips
+        .filter((t) => t.code !== 'uncategorised' && t.code !== 'salary_overdue' && t.code !== 'late_debit_orders')
+        .slice(0, 2)
+        .map((t) => t.message),
+    },
+    title,
+  );
+  const debitOrders = debitOrdersEmbed({
+    cycleLabel: s.cycle.label,
+    payday: paydayOf(s),
+    paydayDateLabel: shortDate(s.cycle.end),
+    paydayProjected: s.cycle.endIsProjected,
+    salary: s.cycle.salary && { amountCents: s.cycle.salary.amountCents, landedLabel: shortDate(s.cycle.salary.occurredOn) },
+    incomeCents: s.incomeCents,
+    netCents: s.netCents,
+    categories: s.categories,
+    pending: s.pendingDebitOrders.map((p) => ({
+      name: p.name,
+      emoji: s.categories.find((c) => c.categoryId === p.categoryId)?.emoji ?? null,
+      allocatedCents: p.allocatedCents,
+      dueLabel: p.expectedOn ? shortDate(p.expectedOn) : null,
+      late: p.late,
+    })),
+    pendingTotalCents: s.pendingTotalCents,
+  });
+  return [{ embeds: [budgets] }, { embeds: [debitOrders] }];
 }
 
 export type AlertKind = 'category_threshold' | 'salary_landed' | 'salary_overdue';
