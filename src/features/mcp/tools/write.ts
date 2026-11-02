@@ -11,7 +11,7 @@ import { parseEmoji } from '@/features/categorisation/emoji';
 import { EXPENSE_TYPES } from '@/features/categorisation/types';
 import { digestPayloads } from '@/features/notifications/budget-messages';
 import { BULK_CONFIRM_THRESHOLD, createCommands } from '@/features/commands/commands';
-import { claudeNoteEmbed, MASTER, payloadText, type DiscordEmbed, type DiscordPayload } from '@/features/notifications/embeds';
+import { claudeNoteEmbed, payloadText, type DiscordEmbed, type DiscordPayload } from '@/features/notifications/embeds';
 import { CURRENCY, money, parseAmount, rand, untrusted } from '../format';
 import { defineTool, ToolError, type ToolContext } from '../tool';
 import { CYCLE_NOTE, MONEY_NOTE } from './read';
@@ -415,7 +415,7 @@ const postStatusToDiscord = defineTool({
     const payloads: DiscordPayload[] = [];
     if (args.include_budget) {
       const { summary, previous, tips } = await deps.budget.overview(userId);
-      const [budgets, debitOrders] = digestPayloads(summary, tips, { title: `📊 Budget status, ${MASTER}`, previous });
+      const [budgets, debitOrders] = digestPayloads(summary, tips, { title: '📊 Budget status', previous });
       embeds.push(...(budgets.embeds ?? []));
       payloads.push({ content: '🤖 **From Claude**', embeds }, debitOrders);
     } else {

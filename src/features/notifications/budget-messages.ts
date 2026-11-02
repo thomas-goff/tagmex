@@ -1,7 +1,7 @@
 import { paydayOf } from '@/features/budget/standing';
 import { isOverspent, type CycleSummary } from '@/features/budget/summary';
 import type { Tip } from '@/features/budget/tips';
-import { dayOfWeek, daysBetween, monthName, parts } from '@/features/cycle/dates';
+import { daysBetween, shortDate } from '@/features/cycle/dates';
 import { escapeMarkdown, formatRand } from '@/features/sync/format';
 import { debitOrdersEmbed, digestEmbed, salaryLandedEmbed, salaryOverdueEmbed, thresholdEmbed, type DiscordPayload } from './embeds';
 
@@ -11,14 +11,11 @@ import { debitOrdersEmbed, digestEmbed, salaryLandedEmbed, salaryOverdueEmbed, t
 // A new cycle's "salary landed" alert is only worth sending close to the day it landed.
 const SALARY_ALERT_WINDOW_DAYS = 3;
 
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// Tips the digest leaves out: those with a line of their own (uncategorised, salary overdue, late
+// debit orders) and those the budget lists already show (overspent, a debit order paid above budget).
+const DIGEST_SKIPS_TIPS = new Set(['uncategorised', 'salary_overdue', 'late_debit_orders', 'overspent', 'static_above_budget']);
 
-export function shortDate(iso: string) {
-  const { day, month } = parts(iso);
-  return `${WEEKDAYS[dayOfWeek(iso)]} ${day} ${monthName(month).slice(0, 3)}`;
-}
-
-// The daily digest, as two messages: budgets, then salary and debit orders. On a cycle's first day,
+// The daily digest, as two messages: budgets, then payday and debit orders. On a cycle's first day,
 // yesterday is in the previous cycle's summary. `title` replaces the first message's title.
 export function digestPayloads(
   s: CycleSummary,
@@ -28,32 +25,23 @@ export function digestPayloads(
   const yesterday = s.yesterday ?? previous?.yesterday ?? null;
   const budgets = digestEmbed(
     {
-      dateLabel: shortDate(s.today),
-      cycleLabel: s.cycle.label,
       discretionaryLeftCents: s.discretionaryLeftCents,
       dailyAllowanceCents: s.dailyAllowanceCents,
-      spentCents: s.spentCents,
-      allocatedCents: s.allocatedCents,
-      yesterday: yesterday && { dateLabel: shortDate(yesterday.date), outCents: yesterday.outCents, count: yesterday.count },
+      yesterday: yesterday && { outCents: yesterday.outCents, count: yesterday.count },
       categories: s.categories,
       uncategorised: s.uncategorised,
-      // The uncategorised and overdue tips have their own fields; late debit orders are in the
-      // second message.
       tips: tips
-        .filter((t) => t.code !== 'uncategorised' && t.code !== 'salary_overdue' && t.code !== 'late_debit_orders')
+        .filter((t) => !DIGEST_SKIPS_TIPS.has(t.code))
         .slice(0, 2)
         .map((t) => t.message),
     },
     title,
   );
   const debitOrders = debitOrdersEmbed({
-    cycleLabel: s.cycle.label,
     payday: paydayOf(s),
     paydayDateLabel: shortDate(s.cycle.end),
     paydayProjected: s.cycle.endIsProjected,
     salary: s.cycle.salary && { amountCents: s.cycle.salary.amountCents, landedLabel: shortDate(s.cycle.salary.occurredOn) },
-    incomeCents: s.incomeCents,
-    netCents: s.netCents,
     categories: s.categories,
     pending: s.pendingDebitOrders.map((p) => ({
       name: p.name,
@@ -100,7 +88,6 @@ export function budgetAlerts(current: CycleSummary, previous: CycleSummary | nul
           salaryLandedEmbed({
             amountCents: salary.amountCents,
             landedLabel: shortDate(salary.occurredOn),
-            cycleLabel: cycle.label,
             nextLabel: shortDate(cycle.end),
             nextProjected: cycle.endIsProjected,
             recap: previous ? recap(previous) : null,

@@ -3,7 +3,7 @@ import { requireUser } from '@/features/auth/session';
 import { budget, budgetRepo } from '@/features/budget';
 import { categoryEmoji, UNCATEGORISED_EMOJI } from '@/features/categorisation/emoji';
 import { addDays, isIsoDate } from '@/features/cycle/dates';
-import { shortDate } from '@/features/notifications/budget-messages';
+import { shortDate } from '@/features/cycle/dates';
 import { formatRand } from '@/features/sync/format';
 import styles from '../dashboard.module.css';
 import { CategoriseForm, ExcludeButton, type CategoryOption } from '../forms';
