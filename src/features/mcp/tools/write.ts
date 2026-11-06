@@ -11,7 +11,7 @@ import { parseEmoji } from '@/features/categorisation/emoji';
 import { EXPENSE_TYPES } from '@/features/categorisation/types';
 import { digestPayloads } from '@/features/notifications/budget-messages';
 import { BULK_CONFIRM_THRESHOLD, createCommands } from '@/features/commands/commands';
-import { claudeNoteEmbed, payloadText, type DiscordEmbed, type DiscordPayload } from '@/features/notifications/embeds';
+import { CONTENT_LIMIT, payloadText, type DiscordPayload } from '@/features/notifications/embeds';
 import { CURRENCY, money, parseAmount, rand, untrusted } from '../format';
 import { defineTool, ToolError, type ToolContext } from '../tool';
 import { CYCLE_NOTE, MONEY_NOTE } from './read';
@@ -378,6 +378,7 @@ const setAccountLabel = defineTool({
 // Claude posting to Discord: a loop or an injected instruction can't flood the channel.
 export const DISCORD_POSTS_PER_HOUR = 5;
 const NOTE_LIMIT = 1000;
+const FROM_CLAUDE = '🤖 **From Claude**';
 
 // Like untrusted(), but keeps line breaks: a note can be a few short lines.
 function cleanNote(text: string) {
@@ -411,15 +412,15 @@ const postStatusToDiscord = defineTool({
     }
 
     // The note and the budgets in one message; salary and debit orders in a second.
-    const embeds: DiscordEmbed[] = note ? [claudeNoteEmbed(note)] : [];
+    const head = note ? `${FROM_CLAUDE}\n${note}` : FROM_CLAUDE;
     const payloads: DiscordPayload[] = [];
     if (args.include_budget) {
       const { summary, previous, tips } = await deps.budget.overview(userId);
-      const [budgets, debitOrders] = digestPayloads(summary, tips, { title: '📊 Budget status', previous });
-      embeds.push(...(budgets.embeds ?? []));
-      payloads.push({ content: '🤖 **From Claude**', embeds }, debitOrders);
+      const limit = CONTENT_LIMIT - head.length - 2;
+      const [budgets, debitOrders] = digestPayloads(summary, tips, { title: '📊 Budget status', previous, limit });
+      payloads.push({ content: `${head}\n\n${budgets.content}` }, debitOrders);
     } else {
-      payloads.push({ content: '🤖 **From Claude**', embeds });
+      payloads.push({ content: head });
     }
     const content = payloads.map(payloadText).join('\n\n');
 

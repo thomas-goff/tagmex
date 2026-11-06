@@ -7,7 +7,7 @@ import { DEFAULT_SETTINGS } from '@/features/budget/types';
 import type { BudgetLine, LedgerRow } from '@/features/budget/types';
 import { cycleContaining, cycleStatus, previousCycle } from '@/features/cycle/cycle';
 import { budgetAlerts, digestPayloads, thresholdKey } from './budget-messages';
-import { embedLength, fieldLines, LIMITS, payloadText } from './embeds';
+import { CONTENT_LIMIT, embedAsText, fieldLines, LIMITS, payloadText } from './embeds';
 import { createBudgetNotifier } from './budget-notifier';
 import { createSystemAlerts, errorFingerprint } from './system-alerts';
 import { budgetStanding } from '@/features/budget/standing';
@@ -241,7 +241,14 @@ describe('budget messages', () => {
     assert.match(text, /🛒 Groceries `██░░░░░░` 20% · R800\.00 left/);
     assert.match(payloadText(payloads[1]), /🛡️ Insurance R900\.00 · \*\*late\*\* \(due Sun 1 Nov\)/);
     assert.match(payloadText(payloads[0]), /❔ 1 transaction \(R72\.00\) needs a category/);
-    for (const p of payloads) assert.ok(embedLength(p.embeds![0]!) < 6000);
+    // Message text, not embeds: some Discord clients drop an embed's fields.
+    for (const p of payloads) {
+      assert.equal(p.embeds, undefined);
+      assert.ok(p.content!.length <= CONTENT_LIMIT);
+    }
+    assert.match(payloads[0].content!, /^### ☀️ Good morning, Master Goff\n/);
+    assert.match(payloads[0].content!, /\n\n\*\*📊 Budgets\*\*\n🛒 Groceries/);
+    assert.match(payloads[1].content!, /^### 🗓️ Payday & debit orders\n/);
   });
 
   test('paid debit orders go in the debit orders message, with their total', () => {
@@ -250,8 +257,8 @@ describe('budget messages', () => {
     ]);
     const [budgets, debits] = digestPayloads(s, []).map(payloadText);
     assert.doesNotMatch(budgets!, /Insurance/);
-    assert.match(debits!, /✅ Paid · R900\.00: 🛡️ Insurance R900\.00/);
-    assert.match(debits!, /🗓️ Still to come: Nothing left this cycle\./);
+    assert.match(debits!, /\*\*✅ Paid · R900\.00\*\*\n🛡️ Insurance R900\.00/);
+    assert.match(debits!, /\*\*🗓️ Still to come\*\*\nNothing left this cycle\./);
   });
 
   test('tips the budget list already shows are left out of the digest', () => {
@@ -262,7 +269,7 @@ describe('budget messages', () => {
       tip('static_above_budget', 'Insurance is settled above budget.'),
       tip('on_pace_to_overspend', 'Petrol is on pace to overspend.'),
     ]).map(payloadText);
-    assert.match(budgets!, /💡 Worth knowing: • Petrol is on pace to overspend\.$/);
+    assert.match(budgets!, /\*\*💡 Worth knowing\*\*\n• Petrol is on pace to overspend\.$/);
     assert.doesNotMatch(budgets!, /Insurance|its R1,000\.00 budget/);
   });
 
@@ -273,6 +280,14 @@ describe('budget messages', () => {
     assert.match(value, /\n…and \d+ more$/);
     for (const line of value.split('\n').slice(0, -1)) assert.ok(many.includes(line));
     assert.equal(fieldLines(['a', 'b']), 'a\nb');
+  });
+
+  test('a digest too long for one message drops whole lines, never the message', () => {
+    const many = Array.from({ length: 60 }, (_, i) => `🛒 Category number ${i} \`████░░░░\` 50% · R1,000.00 left`).join('\n');
+    const text = embedAsText({ title: 'T', description: 'D', fields: [{ name: 'A', value: many }, { name: 'B', value: many }] });
+    assert.ok(text.length <= CONTENT_LIMIT);
+    assert.match(text, /^### T\nD\n\n\*\*A\*\*\n🛒 Category number 0/);
+    assert.match(text, /…and \d+ more/);
   });
 
   test("digest sums up yesterday's money out", () => {

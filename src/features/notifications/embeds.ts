@@ -449,10 +449,26 @@ export function salaryOverdueEmbed(dueLabel: string): DiscordEmbed {
   };
 }
 
-// A note Claude posts on the user's behalf (post_status_to_discord). The message text says it's
-// from Claude.
-export function claudeNoteEmbed(note: string): DiscordEmbed {
-  return { description: clip(note, LIMITS.description), color: COLOURS.blue };
+// ── Embeds as message text ───────────────────────────────────────────────────────────────────────
+
+// Discord's limit on a message's own text.
+export const CONTENT_LIMIT = 2000;
+
+// An embed written out as message text: the title as a heading, the description, then each field
+// as a bold name over its lines. The daily digest goes out like this, because some Discord clients
+// show an embed as just "title: description" and drop its fields (the budget and debit order
+// lists). Message text reads the same everywhere. Fields that don't fit in `limit` end in
+// "…and N more" or are left out, never cut mid-line.
+export function embedAsText(e: DiscordEmbed, limit: number = CONTENT_LIMIT) {
+  let text = clip([e.title && `### ${e.title}`, e.description].filter(Boolean).join('\n'), limit);
+  for (const f of e.fields ?? []) {
+    const name = `\n\n**${f.name}**\n`;
+    // Room for at least a line or an "…and N more".
+    const room = limit - text.length - name.length;
+    if (room < 40) break;
+    text += name + fieldLines(f.value.split('\n'), room);
+  }
+  return text;
 }
 
 // ── System ───────────────────────────────────────────────────────────────────────────────────────
