@@ -1,9 +1,9 @@
 import { paydayOf } from '@/features/budget/standing';
 import { isOverspent, type CycleSummary } from '@/features/budget/summary';
-import type { Tip } from '@/features/budget/tips';
 import { daysBetween, shortDate } from '@/features/cycle/dates';
 import { escapeMarkdown, formatRand } from '@/features/sync/format';
 import { debitOrdersEmbed, digestEmbed, salaryLandedEmbed, salaryOverdueEmbed, thresholdEmbed, type DiscordPayload } from './embeds';
+import { splitToFit } from './layout';
 
 // What the budget posts to Discord, as pure functions of the summary. Discord stays one-way: Claude
 // is where you ask follow-up questions.
@@ -11,30 +11,20 @@ import { debitOrdersEmbed, digestEmbed, salaryLandedEmbed, salaryOverdueEmbed, t
 // A new cycle's "salary landed" alert is only worth sending close to the day it landed.
 const SALARY_ALERT_WINDOW_DAYS = 3;
 
-// Tips the digest leaves out: those with a line of their own (uncategorised, salary overdue, late
-// debit orders) and those the budget lists already show (overspent, a debit order paid above budget).
-const DIGEST_SKIPS_TIPS = new Set(['uncategorised', 'salary_overdue', 'late_debit_orders', 'overspent', 'static_above_budget']);
-
-// The daily digest, as two messages: budgets, then payday and debit orders. On a cycle's first day,
-// yesterday is in the previous cycle's summary. `title` replaces the first message's title. Each
-// goes out as one Components V2 card (see ./layout), which shows its lists on every client.
+// The daily digest: a budgets card, then a payday and debit orders card. On a cycle's first day,
+// yesterday is in the previous cycle's summary. `title` replaces the budgets card's title, and
+// `content` goes above it (Claude's note). Each card is one message when it fits Discord's limits
+// and several when it doesn't (splitToFit), so no list is ever cut short.
 export function digestPayloads(
   s: CycleSummary,
-  tips: Tip[],
-  { title, previous }: { title?: string; previous?: CycleSummary | null } = {},
-): [budgets: DiscordPayload, debitOrders: DiscordPayload] {
+  { title, previous, content }: { title?: string; previous?: CycleSummary | null; content?: string } = {},
+): DiscordPayload[] {
   const yesterday = s.yesterday ?? previous?.yesterday ?? null;
   const budgets = digestEmbed(
     {
-      discretionaryLeftCents: s.discretionaryLeftCents,
-      dailyAllowanceCents: s.dailyAllowanceCents,
       yesterday: yesterday && { outCents: yesterday.outCents, count: yesterday.count },
       categories: s.categories,
       uncategorised: s.uncategorised,
-      tips: tips
-        .filter((t) => !DIGEST_SKIPS_TIPS.has(t.code))
-        .slice(0, 2)
-        .map((t) => t.message),
     },
     title,
   );
@@ -53,7 +43,7 @@ export function digestPayloads(
     })),
     pendingTotalCents: s.pendingTotalCents,
   });
-  return [{ embeds: [budgets] }, { embeds: [debitOrders] }];
+  return [...splitToFit({ ...(content ? { content } : {}), embeds: [budgets] }), ...splitToFit({ embeds: [debitOrders] })];
 }
 
 export type AlertKind = 'category_threshold' | 'salary_landed' | 'salary_overdue';
