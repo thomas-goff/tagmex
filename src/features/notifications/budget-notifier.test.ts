@@ -256,7 +256,7 @@ describe('budget messages', () => {
     assert.match(debits, /^### 🗓️ Payday & debit orders\n/);
   });
 
-  test('budgets over are listed apart from those under, most over first', () => {
+  test('budgets under are listed, then those over, most over first', () => {
     const extra: BudgetLine[] = [
       { categoryId: 'p', categoryName: 'Petrol', categoryEmoji: '⛽', expenseType: 'dynamic', allocatedCents: 500_00, expectedDay: null, isActive: true, sortOrder: 2 },
       { categoryId: 'c', categoryName: 'Clothing', categoryEmoji: '👕', expenseType: 'dynamic', allocatedCents: 100_00, expectedDay: null, isActive: true, sortOrder: 3 },
@@ -273,7 +273,7 @@ describe('budget messages', () => {
       lines: [...lines, ...extra],
     });
     const [budgets] = digestPayloads(s).map(shown);
-    assert.match(budgets!, /\*\*🔴 Over budget\*\*\n👕 Clothing `████████` 500% · \*\*R400\.00 over\*\*\n🛒 Groceries `████████` 120% · \*\*R200\.00 over\*\*\n\*\*🟢 Under budget\*\*\n⛽ Petrol `░░░░░░░░` 0% · R500\.00 left\n🍔 Eating Out `███░░░░░` 33% · R200\.00 left$/);
+    assert.match(budgets!, /\*\*🟢 Under budget\*\*\n⛽ Petrol `░░░░░░░░` 0% · R500\.00 left\n🍔 Eating Out `███░░░░░` 33% · R200\.00 left\n\*\*🔴 Over budget\*\*\n👕 Clothing `████████` 500% · \*\*R400\.00 over\*\*\n🛒 Groceries `████████` 120% · \*\*R200\.00 over\*\*$/);
   });
 
   test('paid debit orders go in the debit orders message, with their total', () => {
