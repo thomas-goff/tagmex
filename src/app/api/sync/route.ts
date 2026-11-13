@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { hasCronSecret, unauthorised } from '@/features/auth/cron-secret';
 import { budgetNotifier, reportSyncFailure } from '@/features/notifications';
 import { dryRunSync } from '@/features/sync/dry-run';
-import { syncMailbox } from '@/features/sync/sync-mailbox';
+import { mailboxSync } from '@/features/sync';
 import { OWNER_USER_ID } from '@/features/users/owner';
 
 // Batches are sized to finish well inside this; Supabase Cron's pg_net timeout is set to match.
@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
   if (!hasCronSecret(req)) return unauthorised();
   const retryFailed = req.nextUrl.searchParams.get('retryFailed') === 'true';
   return run('sync', async () => {
-    const result = await syncMailbox(OWNER_USER_ID, { retryFailed });
+    const result = await mailboxSync.run(OWNER_USER_ID, { retryFailed });
     return { ...result, alerts: await checkAlerts() };
   });
 }

@@ -6,6 +6,7 @@ import {
   categoriseAction,
   createCategoryAction,
   saveBudgetItemAction,
+  saveAccountLabelAction,
   saveNotificationsAction,
   saveSalaryAction,
   setExcludedAction,
@@ -82,6 +83,7 @@ export interface BudgetRowValues {
   allocated: string;
   expenseType: ExpenseType;
   expectedDay: number | null;
+  isSavings: boolean;
   isActive: boolean;
 }
 
@@ -109,6 +111,9 @@ export function BudgetRowForm({ row }: { row: BudgetRowValues }) {
         disabled={type !== 'static'}
         aria-label={`${row.name} debit order day`}
       />
+      <label className={cx(styles.field, styles.check)} title="Money moved here is saved, not spent">
+        <input type="checkbox" name="savings" defaultChecked={row.isSavings} /> Savings
+      </label>
       <label className={cx(styles.field, styles.check)}>
         <input type="checkbox" name="active" defaultChecked={row.isActive} /> Active
       </label>
@@ -163,6 +168,39 @@ export function NewCategoryForm() {
         </button>
         <Feedback state={state} />
       </div>
+    </form>
+  );
+}
+
+export interface AccountRowValues {
+  // e.g. "CHEQ1297": what the action names the account by.
+  key: string;
+  // e.g. "CHEQ …1297".
+  shown: string;
+  label: string;
+  note: string;
+  // e.g. "R1,500.00 on Mon 2 Nov"; null when no bank email has carried a balance.
+  available: string | null;
+}
+
+// A name (and a note) for one of the user's bank accounts. Clearing the name removes it.
+export function AccountLabelForm({ row }: { row: AccountRowValues }) {
+  const [state, action, pending] = useActionState(saveAccountLabelAction, null);
+  return (
+    <form action={action} className={styles.accountRow}>
+      <input type="hidden" name="account" value={row.key} />
+      <span>
+        {row.shown}
+        {row.available && <span className={styles.subtle}> · {row.available}</span>}
+      </span>
+      <input name="label" defaultValue={row.label} placeholder="Name, e.g. Main cheque" maxLength={40} aria-label={`${row.shown} name`} />
+      <input name="note" defaultValue={row.note} placeholder="Note (optional)" maxLength={200} aria-label={`${row.shown} note`} />
+      <span className={styles.inlineForm}>
+        <button className={cx(styles.button, styles.small)} disabled={pending}>
+          {pending ? 'Saving…' : 'Save'}
+        </button>
+        <Feedback state={state} />
+      </span>
     </form>
   );
 }

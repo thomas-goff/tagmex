@@ -29,11 +29,7 @@ export function gmail() {
   }));
 }
 
-// Gmail search for bank mail received in the last `window` (e.g. '30d').
-export function bankMailQuery(window: string) {
-  return `from:${gmailEnv().GMAIL_SENDER} newer_than:${window}`;
-}
-
-export function isBankSender(from: string) {
-  return from.toLowerCase().includes(gmailEnv().GMAIL_SENDER.toLowerCase());
+// The address bank notifications come from (GMAIL_SENDER).
+export function gmailSender() {
+  return gmailEnv().GMAIL_SENDER;
 }

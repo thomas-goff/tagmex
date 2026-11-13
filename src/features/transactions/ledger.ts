@@ -3,6 +3,7 @@
 import type { Database } from '@/db/client';
 import { createCategoryCorrector } from './correct-category';
 import { createDrizzleStores } from './drizzle-stores';
+import { createManualEntries } from './manual-entries';
 import type { UnitOfWork } from './ports';
 import { createTransactionRecorder } from './record-transaction';
 import { seedDefaults } from './seed-defaults';
@@ -18,6 +19,12 @@ export function createLedger(database: Database) {
     // One per sync run or script run (it caches the user's rules).
     createRecorder: () => createTransactionRecorder({ stores, unitOfWork }),
     corrector: createCategoryCorrector({ stores, unitOfWork }),
+    // Transactions added by hand, and splits.
+    manual: createManualEntries({
+      stores,
+      unitOfWork,
+      categorise: async (userId, tx) => (await createTransactionRecorder({ stores, unitOfWork }).preview(userId, tx)).categorisation,
+    }),
     seedDefaults: (userId: string) => seedDefaults(stores, userId),
   };
 }

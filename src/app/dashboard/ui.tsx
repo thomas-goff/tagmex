@@ -1,6 +1,6 @@
 import type { CategoryLine, CategoryStatus } from '@/features/budget/summary';
 import { categoryEmoji } from '@/features/categorisation/emoji';
-import { formatRand } from '@/features/sync/format';
+import { formatRand } from '@/features/transactions/money';
 import styles from './dashboard.module.css';
 
 export const STATUS_LABEL: Record<CategoryStatus, string> = {
@@ -47,7 +47,7 @@ function cardNote(c: CategoryLine) {
           ? `${formatRand(-c.differenceCents)} less than budgeted`
           : 'Paid in full';
     case 'pending':
-      return c.spentCents > 0 ? `${formatRand(c.remainingCents)} still to go` : 'Not paid yet';
+      return c.spentCents > 0 ? `${formatRand(c.remainingCents)} still to go` : c.isSavings ? 'Not put away yet' : 'Not paid yet';
     case 'over':
       return `${formatRand(-c.remainingCents)} over`;
     case 'unbudgeted':

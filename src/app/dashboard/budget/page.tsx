@@ -1,8 +1,7 @@
 import { requireUser } from '@/features/auth/session';
 import { budgetRepo } from '@/features/budget';
 import { categoryEmoji } from '@/features/categorisation/emoji';
-import { formatRand } from '@/features/sync/format';
-import { centsToDecimal } from '@/features/transactions/money';
+import { centsToDecimal, formatRand } from '@/features/transactions/money';
 import styles from '../dashboard.module.css';
 import { BudgetRowForm, NewCategoryForm } from '../forms';
 import { cx } from '../ui';
@@ -20,7 +19,8 @@ export default async function Budget() {
         <div>
           <h1>Budget</h1>
           <div className={styles.subtle}>
-            Per cycle, salary to salary. Static items are fixed debit orders: paid in full, they show as settled.
+            Per cycle, salary to salary. Static items are fixed debit orders: paid in full, they show as settled. Savings is money
+            put away: it counts as saved, not spent.
           </div>
         </div>
         <div className={styles.statValue}>{formatRand(total)}</div>
@@ -33,6 +33,7 @@ export default async function Budget() {
           <span>Per cycle</span>
           <span>Type</span>
           <span>Day</span>
+          <span>Savings</span>
           <span>Active</span>
           <span />
         </div>
@@ -46,6 +47,7 @@ export default async function Budget() {
               allocated: centsToDecimal(l.allocatedCents),
               expenseType: l.expenseType,
               expectedDay: l.expectedDay,
+              isSavings: l.isSavings,
               isActive: l.isActive,
             }}
           />

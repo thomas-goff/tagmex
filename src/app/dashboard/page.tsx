@@ -4,7 +4,7 @@ import { budget } from '@/features/budget';
 import { isIsoDate } from '@/features/cycle/dates';
 import { categoryEmoji } from '@/features/categorisation/emoji';
 import { shortDate } from '@/features/cycle/dates';
-import { formatRand } from '@/features/sync/format';
+import { formatRand } from '@/features/transactions/money';
 import styles from './dashboard.module.css';
 import { CategoryCard, cx, paydayLabel, Stat } from './ui';
 
@@ -17,8 +17,9 @@ export default async function Overview({ searchParams }: PageProps<'/dashboard'>
   const { cycle, status } = s;
 
   const budgeted = s.categories.filter((c) => c.isActive && (c.allocatedCents > 0 || c.spentCents !== 0));
-  const flexible = budgeted.filter((c) => c.expenseType !== 'static');
-  const fixed = budgeted.filter((c) => c.expenseType === 'static');
+  const savings = budgeted.filter((c) => c.isSavings);
+  const flexible = budgeted.filter((c) => c.expenseType !== 'static' && !c.isSavings);
+  const fixed = budgeted.filter((c) => c.expenseType === 'static' && !c.isSavings);
   const emojiOf = new Map(s.categories.map((c) => [c.categoryId, c.emoji]));
 
   return (
@@ -48,9 +49,15 @@ export default async function Overview({ searchParams }: PageProps<'/dashboard'>
           value={s.dailyAllowanceCents === null ? '—' : formatRand(s.dailyAllowanceCents)}
           note={`${formatRand(s.discretionaryLeftCents)} discretionary left`}
         />
-        <Stat label="Spent" value={formatRand(s.spentCents)} note={`of ${formatRand(s.allocatedCents)} budgeted`} />
+        <Stat label="Left" value={formatRand(s.leftCents)} note="after what's spent, saved and still to pay" />
+        <Stat label="Spent" value={formatRand(s.spentCents)} note={`of ${formatRand(s.allocatedCents - savings.reduce((sum, c) => sum + c.allocatedCents, 0))} budgeted`} />
+        {(s.savedCents !== 0 || savings.length > 0) && (
+          <Stat label="Saved" value={formatRand(s.savedCents)} note={s.incomeCents > 0 ? `${Math.round((s.savedCents * 100) / s.incomeCents)}% of income` : undefined} />
+        )}
         <Stat label="Income" value={formatRand(s.incomeCents)} note={`net ${formatRand(s.netCents)}`} />
       </section>
+
+      {!s.hasFullData && <div className={styles.notice}>Tracking began part-way through this cycle, so its totals are incomplete.</div>}
 
       {s.uncategorised.count > 0 && (
         <div className={styles.notice}>
@@ -84,6 +91,17 @@ export default async function Overview({ searchParams }: PageProps<'/dashboard'>
         </>
       )}
 
+      {savings.length > 0 && (
+        <>
+          <h2 className={styles.sectionTitle}>Savings</h2>
+          <div className={styles.cards}>
+            {savings.map((c) => (
+              <CategoryCard key={c.categoryId} c={c} />
+            ))}
+          </div>
+        </>
+      )}
+
       <div className={styles.twoCol}>
         <section>
           <h2 className={styles.sectionTitle}>Debit orders to come · {formatRand(s.pendingTotalCents)}</h2>
@@ -101,7 +119,8 @@ export default async function Overview({ searchParams }: PageProps<'/dashboard'>
                       {p.name}
                     </span>
                     <span>
-                      {formatRand(p.allocatedCents)}
+                      {formatRand(p.remainingCents)}
+                      {p.paidCents > 0 && <span className={styles.subtle}> of {formatRand(p.allocatedCents)}</span>}
                       {p.expectedOn && (
                         <span className={cx(styles.subtle, p.late && styles.late)}> · {p.late ? 'late, ' : ''}{shortDate(p.expectedOn)}</span>
                       )}

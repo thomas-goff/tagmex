@@ -6,6 +6,7 @@ import { todayIn } from '@/features/cycle/dates';
 import { createBudgetNotifier } from './budget-notifier';
 import { createNotificationClaims } from './claims';
 import { notify } from './discord';
+import { syncStatusRepo } from '@/features/sync/status';
 import { createSystemAlerts } from './system-alerts';
 
 const claims = createNotificationClaims(db);
@@ -28,12 +29,12 @@ export function reportSyncFailure(userId: string, label: string, message: string
 // stale-sync check. One user's failure doesn't stop the others.
 export async function notifyAllUsers(options: Parameters<typeof budgetNotifier.run>[1]) {
   const results = [];
-  for (const userId of await budgetRepo.listUserIds()) {
+  for (const userId of await syncStatusRepo.listUserIds()) {
     try {
       const budgetResult = await budgetNotifier.run(userId, options);
       const sync = options.dryRun
         ? 'not_checked'
-        : await systemAlerts.checkSyncFreshness(userId, await budgetRepo.lastSuccessfulSync(userId), new Date());
+        : await systemAlerts.checkSyncFreshness(userId, await syncStatusRepo.lastSuccessfulSync(userId), new Date());
       results.push({ userId, ok: true, ...budgetResult, sync });
     } catch (err) {
       console.error(`budget notifications failed for ${userId}`, err);

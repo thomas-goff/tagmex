@@ -11,6 +11,8 @@ export interface LedgerRow {
   categoryKind: CategoryKind | null;
   categoryName: string | null;
   categoryEmoji: string | null;
+  // Money moved into this category is saved, not spent. False when uncategorised.
+  categoryIsSavings: boolean;
 }
 
 // A budget item joined with its category.
@@ -25,6 +27,8 @@ export interface BudgetLine {
   expectedDay: number | null;
   isActive: boolean;
   sortOrder: number;
+  // A savings category: what goes into it counts as saved, not spent.
+  isSavings: boolean;
 }
 
 export interface Settings {

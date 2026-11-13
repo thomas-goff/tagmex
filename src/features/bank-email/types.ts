@@ -32,7 +32,7 @@ export interface ParsedTransaction {
   // Merchant or reference as sent, e.g. "TELCO 0123456789 X1234567".
   descriptionRaw: string;
   description: string;
-  // e.g. CHEQ, CCRD, SAVS.
+  // e.g. CHEQ, CCRD, SAVE.
   accountType: string;
   accountLast4: string;
   balanceAfterCents?: number;
