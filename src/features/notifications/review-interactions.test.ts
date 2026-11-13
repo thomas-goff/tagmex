@@ -115,11 +115,26 @@ describe('Discord request signatures', () => {
     const timestamp = '1793404174';
     const signature = Buffer.from(await crypto.subtle.sign({ name: 'Ed25519' }, pair.privateKey, new TextEncoder().encode(timestamp + body))).toString('hex');
 
-    assert.equal(await verifyDiscordSignature(publicKey, signature, timestamp, body), true);
-    assert.equal(await verifyDiscordSignature(publicKey, signature, timestamp, '{"type":2}'), false);
-    assert.equal(await verifyDiscordSignature(publicKey, signature, '1793404175', body), false);
-    assert.equal(await verifyDiscordSignature('ab'.repeat(32), signature, timestamp, body), false);
-    assert.equal(await verifyDiscordSignature(publicKey, 'nothex', timestamp, body), false);
-    assert.equal(await verifyDiscordSignature(publicKey, '', timestamp, body), false);
+    const now = Number(timestamp) * 1000 + 2_000;
+
+    assert.equal(await verifyDiscordSignature(publicKey, signature, timestamp, body, now), true);
+    assert.equal(await verifyDiscordSignature(publicKey, signature, timestamp, '{"type":2}', now), false);
+    assert.equal(await verifyDiscordSignature(publicKey, signature, '1793404175', body, now), false);
+    assert.equal(await verifyDiscordSignature('ab'.repeat(32), signature, timestamp, body, now), false);
+    assert.equal(await verifyDiscordSignature(publicKey, 'nothex', timestamp, body, now), false);
+    assert.equal(await verifyDiscordSignature(publicKey, '', timestamp, body, now), false);
+  });
+
+  test('a validly signed request is refused once it is more than 5 minutes old (a replay)', async () => {
+    const pair = (await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify'])) as CryptoKeyPair;
+    const publicKey = Buffer.from(await crypto.subtle.exportKey('raw', pair.publicKey)).toString('hex');
+    const body = '{"type":3}';
+    const timestamp = '1793404174';
+    const signature = Buffer.from(await crypto.subtle.sign({ name: 'Ed25519' }, pair.privateKey, new TextEncoder().encode(timestamp + body))).toString('hex');
+    const at = (seconds: number) => (Number(timestamp) + seconds) * 1000;
+
+    assert.equal(await verifyDiscordSignature(publicKey, signature, timestamp, body, at(299)), true);
+    assert.equal(await verifyDiscordSignature(publicKey, signature, timestamp, body, at(301)), false);
+    assert.equal(await verifyDiscordSignature(publicKey, signature, timestamp, body, at(-301)), false);
   });
 });

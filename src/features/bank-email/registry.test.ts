@@ -18,6 +18,8 @@ describe('parser registry', () => {
     assert.equal(registry.parserFor('alerts@otherbank.example'), other);
     assert.equal(registry.parserFor('someone@example.com'), null);
     assert.equal(registry.parserFor(''), null);
+    assert.equal(registry.parserFor('notifyme@absa.co.za <evil@example.com>'), null);
+    assert.equal(registry.parserFor('xnotifyme@absa.co.za'), null);
   });
 
   test('searches Gmail for one bank, or for any of several', () => {

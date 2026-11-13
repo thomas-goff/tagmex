@@ -1,5 +1,6 @@
 import type { BankEmail, ParseResult } from '@/features/bank-email/types';
 import type { ParserRegistry } from '@/features/bank-email/registry';
+import { fromAddress, senderAuthFailure } from '@/features/bank-email/sender-auth';
 import { GmailError, type GmailClient } from '@/features/gmail/client';
 import type { RecordOutcome, TransactionRecorder } from '@/features/transactions/record-transaction';
 import type { NotifiableEmail } from './format';
@@ -187,8 +188,14 @@ export function createMailboxSync({ mail, parsers, store, createRecorder, announ
     try {
       email = await mail.getEmail(gmailId);
       const parser = parsers.parserFor(email.from);
-      // Failed, not ignored: it shows in #system and a retry picks it up once a parser is registered.
-      result = parser ? parser.parse(email) : { status: 'failed', reason: `no parser for mail from "${email.from}"` };
+      // A From header is easy to forge: only mail Gmail saw pass DMARC for the bank's domain counts.
+      const forged = parser ? senderAuthFailure(email.authenticationResults, fromAddress(email.from)!) : null;
+      // Failed, not ignored: it shows in #system, and a retry picks it up once a parser is registered.
+      result = !parser
+        ? { status: 'failed', reason: `no parser for mail from "${email.from}"` }
+        : forged
+          ? { status: 'failed', reason: `sender not verified, not recorded: ${forged}` }
+          : parser.parse(email);
     } catch (err) {
       if (!(err instanceof GmailError && err.status === 404)) throw err; // row stays claimed; recovered later
       result = { status: 'ignored', reason: 'message no longer exists in Gmail' };

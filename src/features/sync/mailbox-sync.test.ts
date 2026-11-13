@@ -6,6 +6,7 @@ import { GmailError, type HistoryRecord } from '@/features/gmail/client';
 import { createMailboxSync, MAX_MESSAGES_PER_RUN, type IngestStore, type SyncOutcome } from './mailbox-sync';
 
 const BANK = 'notifyme@absa.co.za';
+const DMARC_PASS = 'mx.google.com; dkim=pass header.i=@absa.co.za; dmarc=pass (p=REJECT) header.from=absa.co.za';
 
 const transaction = (description: string): ParsedTransaction => ({
   amountCents: -100_00,
@@ -36,7 +37,8 @@ interface Row {
 
 function setup({ historyId = null as string | null, owner = 'owner' } = {}) {
   const emails = new Map<string, BankEmail>();
-  const mail = (id: string, subject: string, from = `Absa <${BANK}>`) => emails.set(id, { id, from, subject, html: null, text: null, receivedAt: new Date('2026-11-03T08:00:00Z') });
+  const mail = (id: string, subject: string, from = `Absa <${BANK}>`, authenticationResults = DMARC_PASS) =>
+    emails.set(id, { id, from, subject, html: null, text: null, receivedAt: new Date('2026-11-03T08:00:00Z'), authenticationResults });
   const state = {
     search: [] as string[], // newest first, as Gmail returns them
     history: null as { records: HistoryRecord[]; historyId: string } | null | 'stale',
@@ -238,6 +240,18 @@ describe('mailbox sync', () => {
     assert.deepEqual([result.failed, result.ignored], [1, 1]);
     assert.match(state.rows.find((r) => r.gmailMessageId === 'm1')!.error!, /no parser for mail from "Other Bank <alerts@otherbank\.example>"/);
     assert.equal(state.rows.find((r) => r.gmailMessageId === 'gone')!.error, 'message no longer exists in Gmail');
+  });
+
+  test('mail claiming to be from the bank that Gmail did not see pass DMARC is a visible failure, not a transaction', async () => {
+    const { sync, state, mail } = setup();
+    mail('forged', 'groceries', `Absa <${BANK}>`, 'mx.google.com; spf=fail smtp.mailfrom=x@evil.example; dmarc=fail (p=REJECT) header.from=absa.co.za');
+    mail('unchecked', 'petrol', BANK, '');
+    state.search = ['unchecked', 'forged'];
+    const result = await sync.run('owner');
+    assert.deepEqual([result.parsed, result.failed], [0, 2]);
+    assert.deepEqual(state.recorded, []);
+    assert.match(state.rows.find((r) => r.gmailMessageId === 'forged')!.error!, /sender not verified, not recorded: DMARC fail/);
+    assert.match(state.rows.find((r) => r.gmailMessageId === 'unchecked')!.error!, /sender not verified/);
   });
 
   test('a failure part-way records the error, keeps the cursor, and leaves the row to be reclaimed', async () => {

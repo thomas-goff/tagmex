@@ -133,6 +133,8 @@ export function createGmailClient(creds: GmailCredentials) {
         html: bodies.html ?? null,
         text: bodies.text ?? null,
         receivedAt: new Date(Number(msg.internalDate)),
+        // The first one is the topmost: the one Gmail added on arrival (see bank-email/sender-auth).
+        authenticationResults: header(msg.payload, 'Authentication-Results'),
       };
     },
   };
