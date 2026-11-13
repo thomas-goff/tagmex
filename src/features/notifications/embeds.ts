@@ -342,8 +342,8 @@ function digestColour(d: DigestInput) {
   return COLOURS.green;
 }
 
-// Message one: yesterday and what needs a category, then the spending budgets, those over budget
-// (most over first) apart from those under.
+// Message one: yesterday and what needs a category, then the spending budgets: those under budget,
+// then those over (most over first).
 //   Yesterday: R250.00 out (2 transactions)
 //   ❔ 1 transaction (R72.00) needs a category
 export function digestEmbed(d: DigestInput, title = `☀️ Good morning, ${MASTER}`): DiscordEmbed {
@@ -365,8 +365,8 @@ export function digestEmbed(d: DigestInput, title = `☀️ Good morning, ${MAST
   const under = budgets.filter((c) => c.status !== 'over').map((c) => line(c, `${formatRand(c.remainingCents)} left`));
 
   const fields = [];
-  if (over.length > 0) fields.push(listField('🔴 Over budget', over));
   if (under.length > 0) fields.push(listField('🟢 Under budget', under));
+  if (over.length > 0) fields.push(listField('🔴 Over budget', over));
 
   return { title, ...(lines.length > 0 ? { description: lines.join('\n') } : {}), color: digestColour(d), fields };
 }
