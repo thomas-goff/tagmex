@@ -215,7 +215,7 @@ Pennyworth, a butler who keeps Master Goff's books. The same numbers are on the 
 | `src/features/budget/` | Pure maths (`summary`, `trend`, `tips`), repo (cents at the boundary), `service.ts` (the one service layer) |
 | `src/features/commands/` | The writes (categorise, budgets, emoji, salary, notifications, exclude), shared by the MCP tools and the dashboard |
 | `src/features/mcp/` | Clerk token check (`auth.ts`, `clerk.ts`), tool wrapper (`tool.ts`: rate limit, audit, errors), tools in `tools/read.ts` and `tools/write.ts` |
-| `src/features/notifications/` | Discord channels, Pennyworth's embeds (`embeds.ts`), digest and alert messages, claim-before-post dedupe, #needs-review edits, #system alerts |
+| `src/features/notifications/` | Discord channels, Pennyworth's messages (`embeds.ts`) and their card layout (`layout.ts`), digest and alert messages, claim-before-post dedupe, #needs-review edits, #system alerts |
 | `src/app/api/mcp/` | The MCP endpoint (stateless streamable HTTP) |
 | `src/app/.well-known/` | OAuth protected resource metadata (points clients at Clerk) |
 | `src/app/api/digest/` | Hourly job: alerts, the daily digest, stale-sync check |
@@ -231,8 +231,11 @@ Pennyworth, a butler who keeps Master Goff's books. The same numbers are on the 
 | #budget | Daily digest from 07:00 SAST, 80% / 100% category alerts, salary landed + last cycle recap, salary overdue | `DISCORD_BUDGET_WEBHOOK_URL` |
 | #system | Parse failures, sync / Gmail token failures (once a day per error, with a ping), no successful sync for 2h (ping), heartbeat, dry runs | `DISCORD_SYSTEM_WEBHOOK_URL` |
 
-Every message is an embed posted as **Pennyworth** (the webhook username). Channels without a
-webhook fall back to #transactions. Set `DISCORD_REVIEW_WEBHOOK_URL` before
+Every message is a card posted as **Pennyworth** (the webhook username), using Discord's
+Components V2 layout: a coloured edge for its status, a heading, the lists under a divider, and
+small grey details at the bottom. Messages are still written as embeds in `embeds.ts`;
+`layout.ts` turns each one into a card when it's sent. #needs-review messages posted before the
+switch are still edited as embeds. Channels without a webhook fall back to #transactions. Set `DISCORD_REVIEW_WEBHOOK_URL` before
 going live: a message can only be edited through the webhook that posted it, so review messages
 posted while it fell back won't get ticked off. Set notification levels per channel in
 Discord (e.g. #system on "@mentions only", so only the pings reach you). Every digest and alert is

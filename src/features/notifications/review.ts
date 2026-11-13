@@ -11,8 +11,10 @@ import { reviewComponents, type ReviewCategory } from './review-components';
 
 const DISCORD_LIMIT = 2000;
 
-// discord_messages.content holds the posted payload as JSON. Rows from before embeds hold the
-// plain text line, which is edited the old way.
+// discord_messages.content holds the posted payload as JSON, marked `layout: 'components'` since
+// messages went out as Components V2. Unmarked payloads were posted as embeds and are edited as
+// embeds (a message can't go back from V2, and these never went to it). Rows from before embeds
+// hold the plain text line, which is edited the old way.
 export function resolvedReviewMessage(stored: string, outcome: string): DiscordMessage {
   const payload = parsePayload(stored);
   return payload ? resolvedReviewPayload(payload, outcome) : resolvedReviewContent(stored, outcome);
@@ -22,7 +24,7 @@ function parsePayload(stored: string): DiscordPayload | null {
   if (!stored.startsWith('{')) return null;
   try {
     const value = JSON.parse(stored) as DiscordPayload;
-    return Array.isArray(value.embeds) ? value : null;
+    return Array.isArray(value.embeds) ? { ...value, layout: value.layout ?? 'embeds' } : null;
   } catch {
     return null;
   }
@@ -71,7 +73,8 @@ export function createReviewMessages(
 
   return {
     async record(userId, transactionId, messageId, payload) {
-      const content = JSON.stringify(payload);
+      // Everything is posted as Components V2 now (discord.ts).
+      const content = JSON.stringify({ ...payload, layout: payload.layout ?? 'components' });
       await db
         .insert(discordMessages)
         .values({ userId, transactionId, channel: 'review', messageId, content })

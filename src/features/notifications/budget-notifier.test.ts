@@ -7,7 +7,8 @@ import { DEFAULT_SETTINGS } from '@/features/budget/types';
 import type { BudgetLine, LedgerRow } from '@/features/budget/types';
 import { cycleContaining, cycleStatus, previousCycle } from '@/features/cycle/cycle';
 import { budgetAlerts, digestPayloads, thresholdKey } from './budget-messages';
-import { CONTENT_LIMIT, embedAsText, fieldLines, LIMITS, payloadText } from './embeds';
+import { fieldLines, LIMITS, payloadText, type DiscordPayload } from './embeds';
+import { layoutText, toComponents } from './layout';
 import { createBudgetNotifier } from './budget-notifier';
 import { createSystemAlerts, errorFingerprint } from './system-alerts';
 import { budgetStanding } from '@/features/budget/standing';
@@ -21,7 +22,9 @@ const spend = (cents: number): LedgerRow[] => [
   { id: 't', occurredOn: '2026-10-31', amountCents: -cents, categoryId: 'g', categoryKind: 'expense', categoryName: 'Groceries', categoryEmoji: '🛒' },
 ];
 
-const digestText = (s: CycleSummary, opts?: Parameters<typeof digestPayloads>[2]) => digestPayloads(s, [], opts).map(payloadText).join('\n\n');
+// A payload's text as Discord shows it: through the Components V2 layout.
+const shown = (p: DiscordPayload) => layoutText(toComponents(p));
+const digestText = (s: CycleSummary, opts?: Parameters<typeof digestPayloads>[2]) => digestPayloads(s, [], opts).map(shown).join('\n\n');
 
 function summaryOn(today: string, rows: LedgerRow[]): CycleSummary {
   const cycle = cycleContaining(today, starts, 31);
@@ -235,27 +238,28 @@ describe('budget messages', () => {
       { id: 'u', occurredOn: '2026-11-02', amountCents: -72_00, categoryId: null, categoryKind: null, categoryName: null, categoryEmoji: null },
     ]);
     const payloads = digestPayloads(s, []);
-    const text = payloads.map(payloadText).join('\n\n');
-    assert.match(payloadText(payloads[1]), /Next payday \*\*Mon 30 Nov\*\*, in 20 days \(estimated\)/);
-    assert.match(text, /\*\*R40\.00 a day\*\* until payday · R800\.00 left to spend/);
-    assert.match(text, /🛒 Groceries `██░░░░░░` 20% · R800\.00 left/);
-    assert.match(payloadText(payloads[1]), /🛡️ Insurance R900\.00 · \*\*late\*\* \(due Sun 1 Nov\)/);
-    assert.match(payloadText(payloads[0]), /❔ 1 transaction \(R72\.00\) needs a category/);
-    // Message text, not embeds: some Discord clients drop an embed's fields.
+    const [budgets, debits] = payloads.map(shown) as [string, string];
+    assert.match(debits, /Next payday \*\*Mon 30 Nov\*\*, in 20 days \(estimated\)/);
+    assert.match(budgets, /\*\*R40\.00 a day\*\* until payday · R800\.00 left to spend/);
+    assert.match(budgets, /🛒 Groceries `██░░░░░░` 20% · R800\.00 left/);
+    assert.match(debits, /🛡️ Insurance R900\.00 · \*\*late\*\* \(due Sun 1 Nov\)/);
+    assert.match(budgets, /❔ 1 transaction \(R72\.00\) needs a category/);
+    // One card each, with the heading over the description and each list under its name.
     for (const p of payloads) {
-      assert.equal(p.embeds, undefined);
-      assert.ok(p.content!.length <= CONTENT_LIMIT);
+      const layout = toComponents(p);
+      assert.equal(layout.length, 1);
+      assert.equal(layout[0]!.type, 17);
     }
-    assert.match(payloads[0].content!, /^### ☀️ Good morning, Master Goff\n/);
-    assert.match(payloads[0].content!, /\n\n\*\*📊 Budgets\*\*\n🛒 Groceries/);
-    assert.match(payloads[1].content!, /^### 🗓️ Payday & debit orders\n/);
+    assert.match(budgets, /^### ☀️ Good morning, Master Goff\n/);
+    assert.match(budgets, /\n\*\*📊 Budgets\*\*\n🛒 Groceries/);
+    assert.match(debits, /^### 🗓️ Payday & debit orders\n/);
   });
 
   test('paid debit orders go in the debit orders message, with their total', () => {
     const s = summaryOn('2026-11-10', [
       { id: 'ins', occurredOn: '2026-11-01', amountCents: -900_00, categoryId: 'i', categoryKind: 'expense', categoryName: 'Insurance', categoryEmoji: '🛡️' },
     ]);
-    const [budgets, debits] = digestPayloads(s, []).map(payloadText);
+    const [budgets, debits] = digestPayloads(s, []).map(shown);
     assert.doesNotMatch(budgets!, /Insurance/);
     assert.match(debits!, /\*\*✅ Paid · R900\.00\*\*\n🛡️ Insurance R900\.00/);
     assert.match(debits!, /\*\*🗓️ Still to come\*\*\nNothing left this cycle\./);
@@ -268,7 +272,7 @@ describe('budget messages', () => {
       tip('overspent', 'Groceries is R200.00 over its R1,000.00 budget.'),
       tip('static_above_budget', 'Insurance is settled above budget.'),
       tip('on_pace_to_overspend', 'Petrol is on pace to overspend.'),
-    ]).map(payloadText);
+    ]).map(shown);
     assert.match(budgets!, /\*\*💡 Worth knowing\*\*\n• Petrol is on pace to overspend\.$/);
     assert.doesNotMatch(budgets!, /Insurance|its R1,000\.00 budget/);
   });
@@ -280,14 +284,6 @@ describe('budget messages', () => {
     assert.match(value, /\n…and \d+ more$/);
     for (const line of value.split('\n').slice(0, -1)) assert.ok(many.includes(line));
     assert.equal(fieldLines(['a', 'b']), 'a\nb');
-  });
-
-  test('a digest too long for one message drops whole lines, never the message', () => {
-    const many = Array.from({ length: 60 }, (_, i) => `🛒 Category number ${i} \`████░░░░\` 50% · R1,000.00 left`).join('\n');
-    const text = embedAsText({ title: 'T', description: 'D', fields: [{ name: 'A', value: many }, { name: 'B', value: many }] });
-    assert.ok(text.length <= CONTENT_LIMIT);
-    assert.match(text, /^### T\nD\n\n\*\*A\*\*\n🛒 Category number 0/);
-    assert.match(text, /…and \d+ more/);
   });
 
   test("digest sums up yesterday's money out", () => {

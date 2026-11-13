@@ -11,7 +11,7 @@ import { parseEmoji } from '@/features/categorisation/emoji';
 import { EXPENSE_TYPES } from '@/features/categorisation/types';
 import { digestPayloads } from '@/features/notifications/budget-messages';
 import { BULK_CONFIRM_THRESHOLD, createCommands } from '@/features/commands/commands';
-import { CONTENT_LIMIT, payloadText, type DiscordPayload } from '@/features/notifications/embeds';
+import { payloadText, type DiscordPayload } from '@/features/notifications/embeds';
 import { CURRENCY, money, parseAmount, rand, untrusted } from '../format';
 import { defineTool, ToolError, type ToolContext } from '../tool';
 import { CYCLE_NOTE, MONEY_NOTE } from './read';
@@ -416,9 +416,8 @@ const postStatusToDiscord = defineTool({
     const payloads: DiscordPayload[] = [];
     if (args.include_budget) {
       const { summary, previous, tips } = await deps.budget.overview(userId);
-      const limit = CONTENT_LIMIT - head.length - 2;
-      const [budgets, debitOrders] = digestPayloads(summary, tips, { title: '📊 Budget status', previous, limit });
-      payloads.push({ content: `${head}\n\n${budgets.content}` }, debitOrders);
+      const [budgets, debitOrders] = digestPayloads(summary, tips, { title: '📊 Budget status', previous });
+      payloads.push({ ...budgets, content: head }, debitOrders);
     } else {
       payloads.push({ content: head });
     }
