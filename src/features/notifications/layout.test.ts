@@ -11,9 +11,20 @@ const textLength = (components: readonly LayoutComponent[]) => layoutText(compon
 const row: DiscordActionRow = { type: 1, components: [{ type: 2, style: 2, label: '🗑️ Exclude', custom_id: 'review:exclude:x' }] };
 
 describe('Components V2 layout', () => {
-  test('an embed becomes a card: heading and description, a divider, fields, footer as subtext', () => {
+  test('an embed becomes a card: heading and description, a divider above each field, footer as subtext', () => {
     const [card, ...rest] = toComponents({
-      embeds: [{ title: '🧾 R72.00', description: '**CORNER SHOP** · 🛒 Groceries', color: COLOURS.green, fields: [{ name: '📊 Budgets', value: 'a\nb' }], footer: { text: 'Card purchase · acc 1234 · Tue 10 Nov' } }],
+      embeds: [
+        {
+          title: '🧾 R72.00',
+          description: '**CORNER SHOP** · 🛒 Groceries',
+          color: COLOURS.green,
+          fields: [
+            { name: '🔴 Over budget', value: 'a\nb' },
+            { name: '🟢 Under budget', value: 'c' },
+          ],
+          footer: { text: 'Card purchase · acc 1234 · Tue 10 Nov' },
+        },
+      ],
     });
     assert.equal(rest.length, 0);
     assert.deepEqual(card, {
@@ -22,7 +33,9 @@ describe('Components V2 layout', () => {
       components: [
         { type: 10, content: '### 🧾 R72.00\n**CORNER SHOP** · 🛒 Groceries' },
         { type: 14, divider: true, spacing: 1 },
-        { type: 10, content: '**📊 Budgets**\na\nb' },
+        { type: 10, content: '**🔴 Over budget**\na\nb' },
+        { type: 14, divider: true, spacing: 1 },
+        { type: 10, content: '**🟢 Under budget**\nc' },
         { type: 10, content: '-# Card purchase · acc 1234 · Tue 10 Nov' },
       ],
     });

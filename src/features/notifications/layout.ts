@@ -4,8 +4,8 @@ import { fieldLines, type DiscordActionRow, type DiscordEmbed, type DiscordPaylo
 // describe a message as text and embeds (that's what the tests, the stored #needs-review payloads
 // and the dry-run previews read); this turns that into the layout just before it's sent. Each
 // embed becomes a container (a card with the embed's colour as its accent edge) of text displays:
-// the title as a heading over the description, a divider, each field as a bold name over its
-// lines, and the footer as small grey subtext. Message text goes above the cards; buttons and
+// the title as a heading over the description, then each field as a bold name over its lines with
+// a divider above it, and the footer as small grey subtext. Message text goes above the cards; buttons and
 // dropdowns go inside the last card.
 //
 // Why: embeds render unevenly (some clients have dropped their fields), and message text can't
@@ -85,15 +85,14 @@ export function toComponents(payload: DiscordPayload, { mention }: { mention?: s
   // A backstop: messages built with splitToFit never need it.
   function cardBody(card: Container, embed: DiscordEmbed) {
     add(card, headerText(embed));
-    const fields = shownFields(embed);
-    if (fields.length > 0 && componentsLeft > 1) {
-      card.components.push(DIVIDER);
-      componentsLeft--;
-    }
-    for (const f of fields) {
+    // A divider above each list, so the heading and every list stand apart.
+    for (const f of shownFields(embed)) {
       const name = fieldName(f.name);
       const value = fit(f.value, textLeft - name.length);
-      if (value) add(card, name + value);
+      if (!value || componentsLeft < 2) continue;
+      card.components.push(DIVIDER);
+      componentsLeft--;
+      add(card, name + value);
     }
     add(card, footerText(embed));
   }
@@ -132,7 +131,8 @@ export function measure(payload: DiscordPayload) {
   for (const e of payload.embeds ?? []) {
     const parts = [headerText(e), ...shownFields(e).map((f) => fieldName(f.name) + f.value), footerText(e)].filter(Boolean);
     text += parts.reduce((n, p) => n + p.length, 0);
-    components += 1 + parts.length + (shownFields(e).length > 0 ? 1 : 0);
+    // The card, its text displays, and a divider above each field.
+    components += 1 + parts.length + shownFields(e).length;
   }
   components += (payload.components ?? []).reduce((n, r) => n + rowSize(r), 0);
   return { text, components };
