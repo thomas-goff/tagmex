@@ -123,6 +123,19 @@ describe('MCP endpoint auth', () => {
     assert.deepEqual(audit.map((a) => [a.userId, a.tool, a.status, a.clientId]), [['owner', 'get_budget_overview', 'ok', 'client_1']]);
   });
 
+  test('initialize names the server with icons served from the request\'s host', async () => {
+    const init = await jsonRpcResult(
+      await endpoint(toolDeps().deps)(
+        rpc({ method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } } }, GOOD_TOKEN),
+      ),
+    );
+    const info = init.result.serverInfo;
+    assert.equal(info.name, 'tagmex');
+    assert.equal(info.websiteUrl, ORIGIN);
+    assert.ok(info.icons.length > 0);
+    for (const icon of info.icons) assert.ok(icon.src.startsWith(`${ORIGIN}/`), icon.src);
+  });
+
   test('protected resource metadata names Clerk as the authorization server', () => {
     assert.deepEqual(protectedResourceMetadata(ORIGIN, 'https://clerk.tagmex.example').authorization_servers, ['https://clerk.tagmex.example']);
     assert.equal(protectedResourceMetadata(ORIGIN, 'x').resource, `${ORIGIN}/api/mcp`);
