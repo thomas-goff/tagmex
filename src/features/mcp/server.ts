@@ -18,6 +18,25 @@ const INSTRUCTIONS = [
   'Only change data (categorise, budgets, categories, rules, settings, exclusions, added or split transactions) when the user asks or agrees; tools that would change many rows return a preview first and need confirm: true.',
 ].join(' ');
 
+// What the server says about itself on initialize. Clients such as Claude's connector list show the
+// icons; they are the app's own favicons (src/app/icon*, public/web-app-manifest-*), served from
+// whichever host the request came in on.
+export function serverInfo(request?: Request) {
+  const info = { name: 'tagmex', title: 'tagmex', version: '0.4.0' };
+  if (!request) return info;
+  const origin = new URL(request.url).origin;
+  return {
+    ...info,
+    websiteUrl: origin,
+    icons: [
+      { src: `${origin}/icon1.svg`, mimeType: 'image/svg+xml', sizes: ['any'] },
+      { src: `${origin}/icon2.png`, mimeType: 'image/png', sizes: ['96x96'] },
+      { src: `${origin}/web-app-manifest-192x192.png`, mimeType: 'image/png', sizes: ['192x192'] },
+      { src: `${origin}/web-app-manifest-512x512.png`, mimeType: 'image/png', sizes: ['512x512'] },
+    ],
+  };
+}
+
 export interface EndpointDeps {
   tools: ToolDeps;
   // Built per request: the metadata URL depends on the host the request came in on.
@@ -42,10 +61,10 @@ function withCors(response: Response) {
 export function createMcpEndpoint({ tools, auth }: EndpointDeps) {
   // A fresh server per request (stateless), bound to that request's verified user.
   const handler = createMcpHandler(
-    ({ authInfo }) => {
+    ({ authInfo, requestInfo }) => {
       const principal = principalOf(authInfo);
       if (!principal) throw new Error('MCP request reached the handler without a verified principal');
-      const server = new McpServer({ name: 'tagmex', version: '0.4.0' }, { instructions: INSTRUCTIONS });
+      const server = new McpServer(serverInfo(requestInfo), { instructions: INSTRUCTIONS });
       registerTools(server, TOOLS, { principal, deps: tools });
       registerPrompts(server);
       return server;
