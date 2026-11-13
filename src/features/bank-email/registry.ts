@@ -1,3 +1,4 @@
+import { fromAddress } from './sender-auth';
 import type { IBankEmailParser } from './types';
 
 // Which parser reads which bank's notification emails, keyed by the address they come from.
@@ -19,9 +20,10 @@ export function createParserRegistry(banks: readonly BankSender[]) {
     senders: entries.map((e) => e.sender),
 
     // The parser for a From header ("Absa <notifyme@absa.co.za>"), or null when it isn't a bank's.
+    // The address must be exactly the bank's: "notifyme@absa.co.za <evil@example.com>" is not.
     parserFor(from: string): IBankEmailParser | null {
-      const header = from.toLowerCase();
-      return entries.find((e) => header.includes(e.sender))?.parser ?? null;
+      const address = fromAddress(from);
+      return entries.find((e) => e.sender === address)?.parser ?? null;
     },
 
     // Gmail search for mail from any of the banks received in the last `window` (e.g. '30d').

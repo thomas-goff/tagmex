@@ -5,6 +5,8 @@ export interface BankEmail {
   html: string | null;
   text: string | null;
   receivedAt: Date;
+  // The topmost Authentication-Results header (Gmail's own verdict on SPF, DKIM and DMARC), or ''.
+  authenticationResults: string;
 }
 
 // Also the `transaction_kind` enum in the database: adding one here needs a migration.
