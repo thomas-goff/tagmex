@@ -288,7 +288,8 @@ export function backlogEmbed(items: TransactionInfo[], failed: number, extra?: s
 
 // ── Budget ───────────────────────────────────────────────────────────────────────────────────────
 
-// The daily digest is two messages: the spending budgets, then payday and debit orders.
+// The daily digest is two cards: the spending budgets, then payday and debit orders. Their lists
+// are never cut short here: ./layout splits a card that's too big for one message.
 
 type DigestCategory = Pick<
   CategoryLine,
@@ -296,11 +297,8 @@ type DigestCategory = Pick<
 >;
 
 export interface DigestInput {
-  discretionaryLeftCents: number;
-  dailyAllowanceCents: number | null;
   categories: DigestCategory[];
   uncategorised: { count: number; outCents: number };
-  tips: string[];
   yesterday: { outCents: number; count: number } | null;
 }
 
@@ -312,6 +310,11 @@ export interface DebitOrdersInput {
   categories: DigestCategory[];
   pending: { name: string; emoji: string | null; allocatedCents: number; dueLabel: string | null; late: boolean }[];
   pendingTotalCents: number;
+}
+
+// A field holding a whole list, one line each. Not clipped: ./layout splits what doesn't fit.
+function listField(name: string, lines: string[]) {
+  return { name: clip(name, LIMITS.fieldName), value: lines.join('\n') };
 }
 
 // Lines joined into one field value. Whole lines only: a line cut in half breaks its markdown, so
@@ -339,13 +342,12 @@ function digestColour(d: DigestInput) {
   return COLOURS.green;
 }
 
-// Message one: what's left to spend, then each spending budget.
-//   **R89.28 a day** until payday · R2,500.00 left to spend
+// Message one: yesterday and what needs a category, then the spending budgets, those over budget
+// (most over first) apart from those under.
 //   Yesterday: R250.00 out (2 transactions)
 //   ❔ 1 transaction (R72.00) needs a category
 export function digestEmbed(d: DigestInput, title = `☀️ Good morning, ${MASTER}`): DiscordEmbed {
-  const left = `${formatRand(d.discretionaryLeftCents)} left to spend`;
-  const lines = [d.dailyAllowanceCents === null ? `**${left}**` : `**${formatRand(d.dailyAllowanceCents)} a day** until payday · ${left}`];
+  const lines = [];
   if (d.yesterday) {
     const { outCents, count } = d.yesterday;
     lines.push(count === 0 ? 'Yesterday: nothing out' : `Yesterday: ${formatRand(outCents)} out (${plural(count, 'transaction')})`);
@@ -354,17 +356,19 @@ export function digestEmbed(d: DigestInput, title = `☀️ Good morning, ${MAST
     lines.push(`${UNCATEGORISED_EMOJI} ${plural(d.uncategorised.count, 'transaction')} (${formatRand(Math.abs(d.uncategorised.outCents))}) ${d.uncategorised.count === 1 ? 'needs' : 'need'} a category`);
   }
 
-  const fields = [];
-  const budgets = d.categories
-    .filter((c) => c.isActive && c.allocatedCents > 0 && c.expenseType !== 'static')
-    .map((c) => {
-      const tail = c.status === 'over' ? `**${formatRand(-c.remainingCents)} over**` : `${formatRand(c.remainingCents)} left`;
-      return `${categoryEmoji(c.emoji)} ${escapeMarkdown(c.name)} \`${bar(c.usedPct ?? 0, 8)}\` ${c.usedPct}% · ${tail}`;
-    });
-  if (budgets.length > 0) fields.push(field('📊 Budgets', fieldLines(budgets)));
-  if (d.tips.length > 0) fields.push(field('💡 Worth knowing', fieldLines(d.tips.map((t) => `• ${escapeMarkdown(t)}`))));
+  const budgets = d.categories.filter((c) => c.isActive && c.allocatedCents > 0 && c.expenseType !== 'static');
+  const line = (c: DigestCategory, tail: string) => `${categoryEmoji(c.emoji)} ${escapeMarkdown(c.name)} \`${bar(c.usedPct ?? 0, 8)}\` ${c.usedPct}% · ${tail}`;
+  const over = budgets
+    .filter((c) => c.status === 'over')
+    .sort((a, b) => a.remainingCents - b.remainingCents)
+    .map((c) => line(c, `**${formatRand(-c.remainingCents)} over**`));
+  const under = budgets.filter((c) => c.status !== 'over').map((c) => line(c, `${formatRand(c.remainingCents)} left`));
 
-  return { title, description: lines.join('\n'), color: digestColour(d), fields };
+  const fields = [];
+  if (over.length > 0) fields.push(listField('🔴 Over budget', over));
+  if (under.length > 0) fields.push(listField('🟢 Under budget', under));
+
+  return { title, ...(lines.length > 0 ? { description: lines.join('\n') } : {}), color: digestColour(d), fields };
 }
 
 // Message two: when the next salary comes, then the debit orders still to come and those paid.
@@ -386,14 +390,12 @@ export function debitOrdersEmbed(d: DebitOrdersInput, title = '🗓️ Payday & 
   const fixed = d.categories.filter((c) => c.isActive && c.expenseType === 'static' && c.allocatedCents > 0);
   if (d.pending.length > 0) {
     fields.push(
-      field(
+      listField(
         `🗓️ Still to come · ${formatRand(d.pendingTotalCents)}`,
-        fieldLines(
-          d.pending.map((p) => {
-            const due = p.dueLabel ? (p.late ? ` · **late** (due ${p.dueLabel})` : ` · due ${p.dueLabel}`) : '';
-            return `${categoryTag(p.name, p.emoji)} ${formatRand(p.allocatedCents)}${due}`;
-          }),
-        ),
+        d.pending.map((p) => {
+          const due = p.dueLabel ? (p.late ? ` · **late** (due ${p.dueLabel})` : ` · due ${p.dueLabel}`) : '';
+          return `${categoryTag(p.name, p.emoji)} ${formatRand(p.allocatedCents)}${due}`;
+        }),
       ),
     );
   } else if (fixed.length > 0) {
@@ -404,18 +406,16 @@ export function debitOrdersEmbed(d: DebitOrdersInput, title = '🗓️ Payday & 
   if (paid.length > 0) {
     const paidCents = paid.reduce((sum, c) => sum + c.spentCents, 0);
     fields.push(
-      field(
+      listField(
         `✅ Paid · ${formatRand(paidCents)}`,
-        fieldLines(
-          paid.map((c) => {
-            const amount = c.status === 'settled' ? formatRand(c.spentCents) : `${formatRand(c.spentCents)} of ${formatRand(c.allocatedCents)}`;
-            const diff =
-              c.status === 'settled' && c.differenceCents
-                ? ` (${formatRand(Math.abs(c.differenceCents))} ${c.differenceCents > 0 ? 'above' : 'below'} budget)`
-                : '';
-            return `${categoryTag(c.name, c.emoji)} ${amount}${diff}`;
-          }),
-        ),
+        paid.map((c) => {
+          const amount = c.status === 'settled' ? formatRand(c.spentCents) : `${formatRand(c.spentCents)} of ${formatRand(c.allocatedCents)}`;
+          const diff =
+            c.status === 'settled' && c.differenceCents
+              ? ` (${formatRand(Math.abs(c.differenceCents))} ${c.differenceCents > 0 ? 'above' : 'below'} budget)`
+              : '';
+          return `${categoryTag(c.name, c.emoji)} ${amount}${diff}`;
+        }),
       ),
     );
   }

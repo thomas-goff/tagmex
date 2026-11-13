@@ -2,13 +2,12 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { summariseCycle, type CycleSummary } from '@/features/budget/summary';
 import type { BudgetService } from '@/features/budget/service';
-import type { Tip } from '@/features/budget/tips';
 import { DEFAULT_SETTINGS } from '@/features/budget/types';
 import type { BudgetLine, LedgerRow } from '@/features/budget/types';
 import { cycleContaining, cycleStatus, previousCycle } from '@/features/cycle/cycle';
 import { budgetAlerts, digestPayloads, thresholdKey } from './budget-messages';
 import { fieldLines, LIMITS, payloadText, type DiscordPayload } from './embeds';
-import { layoutText, toComponents } from './layout';
+import { fits, layoutText, toComponents } from './layout';
 import { createBudgetNotifier } from './budget-notifier';
 import { createSystemAlerts, errorFingerprint } from './system-alerts';
 import { budgetStanding } from '@/features/budget/standing';
@@ -24,7 +23,7 @@ const spend = (cents: number): LedgerRow[] => [
 
 // A payload's text as Discord shows it: through the Components V2 layout.
 const shown = (p: DiscordPayload) => layoutText(toComponents(p));
-const digestText = (s: CycleSummary, opts?: Parameters<typeof digestPayloads>[2]) => digestPayloads(s, [], opts).map(shown).join('\n\n');
+const digestText = (s: CycleSummary, opts?: Parameters<typeof digestPayloads>[1]) => digestPayloads(s, opts).map(shown).join('\n\n');
 
 function summaryOn(today: string, rows: LedgerRow[]): CycleSummary {
   const cycle = cycleContaining(today, starts, 31);
@@ -73,7 +72,7 @@ describe('budget notifier', () => {
     assert.equal(first.digest?.status, 'sent');
     assert.equal(second.digest?.status, 'already_sent');
     assert.deepEqual(posts.map((p) => p.channel), ['budget', 'budget']);
-    assert.match(posts[0]!.content, /Good morning[\s\S]*📊 Budgets/);
+    assert.match(posts[0]!.content, /Good morning[\s\S]*🟢 Under budget/);
     assert.doesNotMatch(posts[0]!.content, /Insurance/);
     assert.match(posts[1]!.content, /Payday & debit orders[\s\S]*Last salary R30,713\.54 on Fri 30 Oct[\s\S]*🛡️ Insurance R900\.00/);
   });
@@ -232,49 +231,83 @@ describe('budget messages', () => {
     assert.ok(budgetAlerts(late, null).some((a) => a.dedupeKey === 'salary_overdue:2026-10-30'));
   });
 
-  test('digest has days to salary, allowance, debit orders and uncategorised', () => {
+  test('digest has yesterday, uncategorised, the budgets, days to salary and debit orders', () => {
     const s = summaryOn('2026-11-10', [
       ...spend(200_00),
       { id: 'u', occurredOn: '2026-11-02', amountCents: -72_00, categoryId: null, categoryKind: null, categoryName: null, categoryEmoji: null },
     ]);
-    const payloads = digestPayloads(s, []);
+    const payloads = digestPayloads(s);
+    assert.equal(payloads.length, 2);
     const [budgets, debits] = payloads.map(shown) as [string, string];
     assert.match(debits, /Next payday \*\*Mon 30 Nov\*\*, in 20 days \(estimated\)/);
-    assert.match(budgets, /\*\*R40\.00 a day\*\* until payday · R800\.00 left to spend/);
-    assert.match(budgets, /🛒 Groceries `██░░░░░░` 20% · R800\.00 left/);
-    assert.match(debits, /🛡️ Insurance R900\.00 · \*\*late\*\* \(due Sun 1 Nov\)/);
     assert.match(budgets, /❔ 1 transaction \(R72\.00\) needs a category/);
+    assert.match(debits, /🛡️ Insurance R900\.00 · \*\*late\*\* \(due Sun 1 Nov\)/);
+    // No daily allowance, left to spend or tips.
+    assert.doesNotMatch(budgets, /a day|left to spend|Worth knowing/);
     // One card each, with the heading over the description and each list under its name.
     for (const p of payloads) {
       const layout = toComponents(p);
       assert.equal(layout.length, 1);
       assert.equal(layout[0]!.type, 17);
     }
-    assert.match(budgets, /^### ☀️ Good morning, Master Goff\n/);
-    assert.match(budgets, /\n\*\*📊 Budgets\*\*\n🛒 Groceries/);
+    assert.match(budgets, /^### ☀️ Good morning, Master Goff\nYesterday/);
+    assert.match(budgets, /\n\*\*🟢 Under budget\*\*\n🛒 Groceries `██░░░░░░` 20% · R800\.00 left/);
+    assert.doesNotMatch(budgets, /Over budget/);
     assert.match(debits, /^### 🗓️ Payday & debit orders\n/);
+  });
+
+  test('budgets over are listed apart from those under, most over first', () => {
+    const extra: BudgetLine[] = [
+      { categoryId: 'p', categoryName: 'Petrol', categoryEmoji: '⛽', expenseType: 'dynamic', allocatedCents: 500_00, expectedDay: null, isActive: true, sortOrder: 2 },
+      { categoryId: 'c', categoryName: 'Clothing', categoryEmoji: '👕', expenseType: 'dynamic', allocatedCents: 100_00, expectedDay: null, isActive: true, sortOrder: 3 },
+      { categoryId: 'e', categoryName: 'Eating Out', categoryEmoji: '🍔', expenseType: 'dynamic', allocatedCents: 300_00, expectedDay: null, isActive: true, sortOrder: 4 },
+    ];
+    const row = (id: string, categoryId: string, categoryName: string, amountCents: number): LedgerRow => ({ id, occurredOn: '2026-11-05', amountCents, categoryId, categoryKind: 'expense', categoryName, categoryEmoji: null });
+    const today = '2026-11-10';
+    const cycle = cycleContaining(today, starts, 31);
+    const s = summariseCycle({
+      cycle,
+      status: cycleStatus(cycle, today, true),
+      today,
+      rows: [row('a', 'g', 'Groceries', -1200_00), row('b', 'c', 'Clothing', -500_00), row('d', 'e', 'Eating Out', -100_00)],
+      lines: [...lines, ...extra],
+    });
+    const [budgets] = digestPayloads(s).map(shown);
+    assert.match(budgets!, /\*\*🔴 Over budget\*\*\n👕 Clothing `████████` 500% · \*\*R400\.00 over\*\*\n🛒 Groceries `████████` 120% · \*\*R200\.00 over\*\*\n\*\*🟢 Under budget\*\*\n⛽ Petrol `░░░░░░░░` 0% · R500\.00 left\n🍔 Eating Out `███░░░░░` 33% · R200\.00 left$/);
   });
 
   test('paid debit orders go in the debit orders message, with their total', () => {
     const s = summaryOn('2026-11-10', [
       { id: 'ins', occurredOn: '2026-11-01', amountCents: -900_00, categoryId: 'i', categoryKind: 'expense', categoryName: 'Insurance', categoryEmoji: '🛡️' },
     ]);
-    const [budgets, debits] = digestPayloads(s, []).map(shown);
+    const [budgets, debits] = digestPayloads(s).map(shown);
     assert.doesNotMatch(budgets!, /Insurance/);
     assert.match(debits!, /\*\*✅ Paid · R900\.00\*\*\n🛡️ Insurance R900\.00/);
     assert.match(debits!, /\*\*🗓️ Still to come\*\*\nNothing left this cycle\./);
   });
 
-  test('tips the budget list already shows are left out of the digest', () => {
-    const tip = (code: Tip['code'], message: string): Tip => ({ code, severity: 'info', message, data: {} });
-    const s = summaryOn('2026-11-10', spend(1200_00));
-    const [budgets] = digestPayloads(s, [
-      tip('overspent', 'Groceries is R200.00 over its R1,000.00 budget.'),
-      tip('static_above_budget', 'Insurance is settled above budget.'),
-      tip('on_pace_to_overspend', 'Petrol is on pace to overspend.'),
-    ]).map(shown);
-    assert.match(budgets!, /\*\*💡 Worth knowing\*\*\n• Petrol is on pace to overspend\.$/);
-    assert.doesNotMatch(budgets!, /Insurance|its R1,000\.00 budget/);
+  test('a digest too big for one message is split, never cut short', () => {
+    const many: BudgetLine[] = Array.from({ length: 120 }, (_, i) => ({
+      categoryId: `c${i}`,
+      categoryName: `Category number ${i}`,
+      categoryEmoji: '🛒',
+      expenseType: 'dynamic',
+      allocatedCents: 1000_00,
+      expectedDay: null,
+      isActive: true,
+      sortOrder: i,
+    }));
+    const today = '2026-11-10';
+    const cycle = cycleContaining(today, starts, 31);
+    const s = summariseCycle({ cycle, status: cycleStatus(cycle, today, true), today, rows: [], lines: [...lines, ...many] });
+    const payloads = digestPayloads(s, { content: 'Note' });
+    assert.ok(payloads.length > 2, String(payloads.length));
+    for (const p of payloads) assert.ok(fits(p));
+    const text = payloads.map(shown).join('\n');
+    for (const l of many) assert.ok(text.includes(`${l.categoryName} \``), l.categoryName);
+    assert.doesNotMatch(text, /…and \d+ more/);
+    assert.match(shown(payloads[0]!), /^Note\n### ☀️ Good morning/);
+    assert.match(shown(payloads[1]!), /^### ☀️ Good morning, Master Goff \(continued\)\n\*\*🟢 Under budget \(continued\)\*\*\n/);
   });
 
   test('a long budget list ends in "…and N more", never a line cut in half', () => {

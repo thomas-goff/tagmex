@@ -9,7 +9,7 @@ import { payloadText, type DiscordPayload } from './embeds';
 // Posts the daily digest and budget alerts. Claim before post: a key is inserted first and the
 // message only goes out if this run inserted it, so retries and overlapping runs never duplicate.
 // A failed post gives its claim back for the next run, and never throws into the caller (the sync).
-// The digest is two messages under one claim: if the first fails nothing went out and the claim
+// The digest is two or more messages under one claim: if the first fails nothing went out and the claim
 // goes back; if a later one fails the first is already up, so the claim stays (no duplicate) and
 // the status is 'partial'.
 
@@ -55,7 +55,7 @@ export function createBudgetNotifier({ budget, getSettings, claims, post, now = 
 
   return {
     async run(userId: string, { digest, force = false, dryRun = false }: NotifyOptions) {
-      const [settings, { summary, previous, tips }] = await Promise.all([getSettings(userId), budget.overview(userId)]);
+      const [settings, { summary, previous }] = await Promise.all([getSettings(userId), budget.overview(userId)]);
       const result: {
         today: string;
         digest: { status: NotificationStatus; message?: string } | null;
@@ -72,7 +72,7 @@ export function createBudgetNotifier({ budget, getSettings, claims, post, now = 
       }
 
       if (digest) {
-        const payloads: DiscordPayload[] = digestPayloads(summary, tips, { previous });
+        const payloads: DiscordPayload[] = digestPayloads(summary, { previous });
         const due = force || hourIn(settings.timezone, now()) >= settings.digestHour;
         const status: NotificationStatus = !settings.digestEnabled
           ? 'disabled'

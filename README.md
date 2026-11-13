@@ -234,7 +234,9 @@ Pennyworth, a butler who keeps Master Goff's books. The same numbers are on the 
 Every message is a card posted as **Pennyworth** (the webhook username), using Discord's
 Components V2 layout: a coloured edge for its status, a heading, the lists under a divider, and
 small grey details at the bottom. Messages are still written as embeds in `embeds.ts`;
-`layout.ts` turns each one into a card when it's sent. #needs-review messages posted before the
+`layout.ts` turns each one into a card when it's sent. A card too big for Discord's limits (4000
+characters, 40 components per message) continues in another message titled "(continued)",
+so the digest's lists are never cut short. #needs-review messages posted before the
 switch are still edited as embeds. Channels without a webhook fall back to #transactions. Set `DISCORD_REVIEW_WEBHOOK_URL` before
 going live: a message can only be edited through the webhook that posted it, so review messages
 posted while it fell back won't get ticked off. Set notification levels per channel in

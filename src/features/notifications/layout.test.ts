@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { COLOURS, systemEmbed, type DiscordActionRow, type DiscordPayload } from './embeds';
-import { LAYOUT_LIMITS, layoutText, toComponents, type Container, type LayoutComponent } from './layout';
+import { fits, LAYOUT_LIMITS, layoutText, splitToFit, toComponents, type Container, type LayoutComponent } from './layout';
 
 const count = (components: readonly { type: number; components?: readonly unknown[] }[]): number =>
   components.reduce((n, c) => n + 1 + (c.components ? count(c.components as { type: number }[]) : 0), 0);
@@ -68,5 +68,23 @@ describe('Components V2 layout', () => {
     assert.ok(count(layout) <= LAYOUT_LIMITS.components, String(count(layout)));
     const last = layout.at(-1) as Container;
     assert.deepEqual(last.components.slice(-2), [row, row]);
+  });
+
+  test('splitToFit: one message when it fits; a list too long for any message is split between its lines', () => {
+    const small: DiscordPayload = { embeds: [{ title: 'T', fields: [{ name: 'A', value: 'a' }] }] };
+    assert.deepEqual(splitToFit(small), [small]);
+
+    const many = Array.from({ length: 150 }, (_, i) => `line number ${i} with a little padding to it`);
+    const messages = splitToFit({ embeds: [{ title: 'T', description: 'D', color: COLOURS.red, fields: [{ name: 'A', value: many.join('\n') }] }], components: [row] });
+    assert.ok(messages.length > 1);
+    for (const m of messages) assert.ok(fits(m));
+    // Every line, once, in order.
+    const lines = messages.flatMap((m) => (m.embeds ?? []).flatMap((e) => (e.fields ?? []).flatMap((f) => f.value.split('\n'))));
+    assert.deepEqual(lines, many);
+    assert.equal(messages[0]!.embeds![0]!.fields![0]!.name, 'A');
+    assert.deepEqual(messages[1]!.embeds![0], { ...messages[1]!.embeds![0], title: 'T (continued)', color: COLOURS.red });
+    assert.equal(messages[1]!.embeds![0]!.fields![0]!.name, 'A (continued)');
+    // The controls go on the last message only.
+    assert.deepEqual(messages.map((m) => Boolean(m.components)), messages.map((_, i) => i === messages.length - 1));
   });
 });
