@@ -3,7 +3,7 @@ import { isOverspent, type CycleSummary } from '@/features/budget/summary';
 import type { Tip } from '@/features/budget/tips';
 import { daysBetween, shortDate } from '@/features/cycle/dates';
 import { escapeMarkdown, formatRand } from '@/features/sync/format';
-import { debitOrdersEmbed, digestEmbed, embedAsText, salaryLandedEmbed, salaryOverdueEmbed, thresholdEmbed, type DiscordPayload } from './embeds';
+import { debitOrdersEmbed, digestEmbed, salaryLandedEmbed, salaryOverdueEmbed, thresholdEmbed, type DiscordPayload } from './embeds';
 
 // What the budget posts to Discord, as pure functions of the summary. Discord stays one-way: Claude
 // is where you ask follow-up questions.
@@ -16,13 +16,12 @@ const SALARY_ALERT_WINDOW_DAYS = 3;
 const DIGEST_SKIPS_TIPS = new Set(['uncategorised', 'salary_overdue', 'late_debit_orders', 'overspent', 'static_above_budget']);
 
 // The daily digest, as two messages: budgets, then payday and debit orders. On a cycle's first day,
-// yesterday is in the previous cycle's summary. `title` replaces the first message's title.
-// Message text rather than embeds (see embedAsText), so every client shows the lists. `limit` caps
-// the first message, for a caller that puts its own text above it.
+// yesterday is in the previous cycle's summary. `title` replaces the first message's title. Each
+// goes out as one Components V2 card (see ./layout), which shows its lists on every client.
 export function digestPayloads(
   s: CycleSummary,
   tips: Tip[],
-  { title, previous, limit }: { title?: string; previous?: CycleSummary | null; limit?: number } = {},
+  { title, previous }: { title?: string; previous?: CycleSummary | null } = {},
 ): [budgets: DiscordPayload, debitOrders: DiscordPayload] {
   const yesterday = s.yesterday ?? previous?.yesterday ?? null;
   const budgets = digestEmbed(
@@ -54,7 +53,7 @@ export function digestPayloads(
     })),
     pendingTotalCents: s.pendingTotalCents,
   });
-  return [{ content: embedAsText(budgets, limit) }, { content: embedAsText(debitOrders) }];
+  return [{ embeds: [budgets] }, { embeds: [debitOrders] }];
 }
 
 export type AlertKind = 'category_threshold' | 'salary_landed' | 'salary_overdue';

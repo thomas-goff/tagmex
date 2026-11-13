@@ -4,7 +4,8 @@ import { categoryEmoji, UNCATEGORISED_EMOJI } from '@/features/categorisation/em
 import { shortDate } from '@/features/cycle/dates';
 import { escapeMarkdown, formatRand } from '@/features/sync/format';
 
-// Discord embeds from Pennyworth, a butler who keeps Master Goff's books. Short on purpose: the
+// Discord messages from Pennyworth, a butler who keeps Master Goff's books, described as embeds:
+// discord.ts posts each embed as a Components V2 card (see ./layout). Short on purpose: the
 // numbers lead, the butler only shows in a greeting or two. Pure functions of the data, so every
 // message can be tested without Discord. Text from bank emails is escaped and clipped; it never
 // pings anyone (allowed_mentions in discord.ts). Footers only where they add something (a
@@ -48,8 +49,13 @@ export interface DiscordActionRow {
 export interface DiscordPayload {
   content?: string;
   embeds?: DiscordEmbed[];
-  // [] removes a message's controls when it's edited; leaving it out keeps them.
+  // The controls. When editing a Components V2 message they're part of the layout, so [] and
+  // leaving them out both remove them; on an 'embeds' message, leaving them out keeps them.
   components?: DiscordActionRow[];
+  // How the message is on Discord. 'components' (the default): Components V2 cards, built from
+  // the embeds by ./layout. 'embeds': a message posted before that, which can only be edited as
+  // embeds (#needs-review rows stored before the switch).
+  layout?: 'components' | 'embeds';
 }
 
 // Discord's limits.
@@ -447,28 +453,6 @@ export function salaryOverdueEmbed(dueLabel: string): DiscordEmbed {
     description: `It was due ${dueLabel} and hasn't shown up. If it has landed, check it's categorised as Salary.`,
     color: COLOURS.red,
   };
-}
-
-// ── Embeds as message text ───────────────────────────────────────────────────────────────────────
-
-// Discord's limit on a message's own text.
-export const CONTENT_LIMIT = 2000;
-
-// An embed written out as message text: the title as a heading, the description, then each field
-// as a bold name over its lines. The daily digest goes out like this, because some Discord clients
-// show an embed as just "title: description" and drop its fields (the budget and debit order
-// lists). Message text reads the same everywhere. Fields that don't fit in `limit` end in
-// "…and N more" or are left out, never cut mid-line.
-export function embedAsText(e: DiscordEmbed, limit: number = CONTENT_LIMIT) {
-  let text = clip([e.title && `### ${e.title}`, e.description].filter(Boolean).join('\n'), limit);
-  for (const f of e.fields ?? []) {
-    const name = `\n\n**${f.name}**\n`;
-    // Room for at least a line or an "…and N more".
-    const room = limit - text.length - name.length;
-    if (room < 40) break;
-    text += name + fieldLines(f.value.split('\n'), room);
-  }
-  return text;
 }
 
 // ── System ───────────────────────────────────────────────────────────────────────────────────────

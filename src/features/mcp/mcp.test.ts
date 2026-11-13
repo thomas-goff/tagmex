@@ -453,9 +453,9 @@ describe('post_status_to_discord', () => {
     assert.equal(posts.length, 2);
     const [channel, content] = posts[0]!;
     assert.equal(channel, 'budget');
-    assert.match(content, /^🤖 \*\*From Claude\*\*\nSorted 12 transactions \.\n\nAll caught up\.\n\n### 📊 Budget status\n/);
+    assert.match(content, /^🤖 \*\*From Claude\*\*\nSorted 12 transactions \.\n\nAll caught up\.\n📊 Budget status\n/);
     assert.equal(posts[1]![0], 'budget');
-    assert.match(posts[1]![1], /^### 🗓️ Payday & debit orders\nNext payday \*\*[^*]+\*\*, in 25 days/);
+    assert.match(posts[1]![1], /^🗓️ Payday & debit orders\nNext payday \*\*[^*]+\*\*, in 25 days/);
     assert.deepEqual((res.structuredContent as { message_ids: string[] }).message_ids, ['msg_1', 'msg_1']);
     assert.equal((res.structuredContent as { message_id: string }).message_id, 'msg_1');
 
