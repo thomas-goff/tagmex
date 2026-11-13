@@ -10,8 +10,9 @@ import { parseEmoji } from '@/features/categorisation/emoji';
 import { EXPENSE_TYPES } from '@/features/categorisation/types';
 import { commands } from '@/features/commands';
 import { CommandError } from '@/features/commands/commands';
-import { parseAmount } from '@/features/mcp/format';
+import { cleanText } from '@/features/text/clean';
 import { NotFoundError } from '@/features/transactions/correct-category';
+import { parseAmount } from '@/features/transactions/money';
 
 // The dashboard's writes. Each action is a public POST endpoint, so each one checks the session
 // itself (requireUser) and runs as that user only; ids from the form are looked up within the
@@ -108,6 +109,7 @@ const budgetItemInput = z.object({
     z.number({ error: 'Day must be a number' }).int().min(1, 'Day must be 1-31').max(31, 'Day must be 1-31').optional(),
   ),
   active: checkbox,
+  savings: checkbox,
   emoji,
 });
 
@@ -116,6 +118,7 @@ export async function saveBudgetItemAction(_prev: ActionState, form: FormData): 
   try {
     const input = budgetItemInput.parse(Object.fromEntries(form));
     await commands.setCategoryEmoji(userId, input.categoryId, input.emoji);
+    await commands.updateCategory(userId, input.categoryId, { savings: input.savings });
     const line = await commands.setBudgetItem(userId, input.categoryId, {
       allocatedCents: input.allocated,
       expenseType: input.expenseType,
@@ -171,6 +174,32 @@ export async function saveSalaryAction(_prev: ActionState, form: FormData): Prom
     return done(`Saved. Current cycle: ${cycle.label}, next salary ${cycle.end}${cycle.endIsProjected ? ' (projected)' : ''}.`);
   } catch (err) {
     if (err instanceof CommandError && err.code === 'zero_salary') return { ok: false, message: `${err.message} Leave it empty to accept any amount.` };
+    return fail(err);
+  }
+}
+
+// Label text is shown back on Discord and to Claude, so it's cleaned like any other outside text.
+const labelText = (max: number) => z.string().transform((value) => cleanText(value, max));
+
+const accountLabelInput = z.object({
+  // Type and last 4 digits, e.g. CHEQ1297: looked up among the user's own accounts.
+  account: z.string().trim().min(1).max(20),
+  label: labelText(40),
+  note: labelText(200),
+});
+
+// Names one of the user's accounts; an empty name removes it.
+export async function saveAccountLabelAction(_prev: ActionState, form: FormData): Promise<ActionState> {
+  const { userId } = await requireUser();
+  try {
+    const input = accountLabelInput.parse(Object.fromEntries(form));
+    const result = await commands.setAccountLabel(userId, {
+      account: input.account,
+      label: input.label === '' ? null : input.label,
+      note: input.note === '' ? null : input.note,
+    });
+    return done(result.label === null ? (result.removed ? 'Name removed' : 'No name to remove') : `Saved as ${result.label}`);
+  } catch (err) {
     return fail(err);
   }
 }

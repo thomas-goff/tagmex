@@ -28,7 +28,7 @@ export const MAX_TREND_CYCLES = 12;
 interface Deps {
   repo: Pick<
     BudgetRepo,
-    'getSettings' | 'listSalaryCredits' | 'listLedgerRows' | 'listBudgetLines' | 'ensureBudgetItems'
+    'getSettings' | 'listSalaryCredits' | 'listLedgerRows' | 'listBudgetLines' | 'ensureBudgetItems' | 'firstTransactionDate'
   >;
   now?: () => Date;
 }
@@ -38,20 +38,27 @@ export interface UserContext {
   starts: SalaryCredit[];
   today: string;
   current: Cycle;
+  // The date of the ledger's first transaction; null while it's empty. Cycles that began before
+  // it were only tracked part-way, or not at all.
+  trackedFrom: string | null;
 }
 
 export type BudgetService = ReturnType<typeof createBudgetService>;
 
 export function createBudgetService({ repo, now = () => new Date() }: Deps) {
   async function context(userId: string): Promise<UserContext> {
-    const [settings, credits] = await Promise.all([repo.getSettings(userId), repo.listSalaryCredits(userId)]);
+    const [settings, credits, trackedFrom] = await Promise.all([
+      repo.getSettings(userId),
+      repo.listSalaryCredits(userId),
+      repo.firstTransactionDate(userId),
+    ]);
     const starts = detectSalaryStarts(credits, {
       salaryDayHint: settings.salaryDayHint,
       expectedSalaryCents: settings.expectedSalaryCents,
       tolerancePct: settings.salaryTolerancePct,
     });
     const today = todayIn(settings.timezone, now());
-    return { settings, starts, today, current: cycleContaining(today, starts, settings.salaryDayHint) };
+    return { settings, starts, today, current: cycleContaining(today, starts, settings.salaryDayHint), trackedFrom };
   }
 
   // A cycle id is its start date, but any date inside the cycle finds it too.
@@ -78,6 +85,7 @@ export function createBudgetService({ repo, now = () => new Date() }: Deps) {
         today: ctx.today,
         rows: rows.filter((r) => r.occurredOn >= cycle.start && r.occurredOn < end),
         lines,
+        hasFullData: ctx.trackedFrom !== null && cycle.start >= ctx.trackedFrom,
       });
     });
   }
@@ -103,11 +111,16 @@ export function createBudgetService({ repo, now = () => new Date() }: Deps) {
       return { summary: summary!, previous: prior!, tips: deriveTips({ current: summary!, previous: prior! }) };
     },
 
-    // The last `completed` finished cycles plus the current one, oldest first.
+    // The last `completed` finished cycles plus the current one, oldest first. Never further back
+    // than the ledger goes: a cycle that ended before the first transaction has nothing in it.
     async trend(userId: string, completed: number) {
       const ctx = await context(userId);
       const cycles = [ctx.current];
-      for (let i = 0; i < Math.min(Math.max(completed, 1), MAX_TREND_CYCLES); i++) cycles.unshift(previous(ctx, cycles[0]!));
+      for (let i = 0; i < Math.min(Math.max(completed, 1), MAX_TREND_CYCLES); i++) {
+        const earlier = previous(ctx, cycles[0]!);
+        if (ctx.trackedFrom === null || earlier.end <= ctx.trackedFrom) break;
+        cycles.unshift(earlier);
+      }
       return spendingTrend(await summarise(userId, ctx, cycles));
     },
   };

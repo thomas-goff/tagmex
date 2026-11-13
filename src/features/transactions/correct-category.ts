@@ -11,7 +11,7 @@ export class NotFoundError extends Error {
 }
 
 // A category by id, or by name ignoring case, so callers can say "groceries".
-export function findCategory(categories: Category[], ref: string) {
+export function findCategory<C extends Pick<Category, 'id' | 'name'>>(categories: readonly C[], ref: string): C | null {
   const name = ref.trim().toLowerCase();
   return categories.find((c) => c.id === ref) ?? categories.find((c) => c.name.toLowerCase() === name) ?? null;
 }
@@ -31,7 +31,7 @@ interface Deps {
 
 export type CategoryCorrector = ReturnType<typeof createCategoryCorrector>;
 
-// The "categorise this" action, called by the categorise_transaction MCP tool and the interim route.
+// The "categorise this" action behind categorise_transaction, the dashboard and #needs-review.
 export function createCategoryCorrector({ stores, unitOfWork }: Deps) {
   return {
     // The other uncategorised transactions the learned rule would categorise.
@@ -42,6 +42,36 @@ export function createCategoryCorrector({ stores, unitOfWork }: Deps) {
       return (await stores.transactions.listUncategorised(userId))
         .filter((t) => t.id !== tx.id && ruleApplies(rule, t))
         .map((t) => t.id);
+    },
+
+    // Moves transactions that may already be categorised to another category, by hand. With
+    // `learn`, each description among them also gets (or re-points) its rule, in the direction
+    // the money moved, so future emails follow.
+    async recategorise({
+      userId,
+      rows,
+      categoryId,
+      learn,
+    }: {
+      userId: string;
+      rows: readonly Pick<StoredTransaction, 'id' | 'descriptionNormalised' | 'amountCents'>[];
+      categoryId: string;
+      learn: boolean;
+    }) {
+      return unitOfWork(async (s) => {
+        const changed = await s.transactions.setCategoryMany(userId, rows.map((r) => r.id), { categoryId, source: 'manual', ruleId: null });
+        const taught = new Set<string>();
+        if (learn) {
+          for (const row of rows) {
+            const rule = learnedRuleFor(row);
+            const key = `${rule.pattern}\u0000${rule.direction}`;
+            if (taught.has(key)) continue;
+            taught.add(key);
+            await s.categories.upsertRule(userId, { ...rule, categoryId, origin: 'learned' });
+          }
+        }
+        return { changed, rulesLearned: taught.size };
+      });
     },
 
     // Sets the category by hand and learns an exact rule for the description, in the direction the

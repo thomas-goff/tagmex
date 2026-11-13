@@ -12,6 +12,11 @@ import type {
 
 export type CategoryAssignment = Pick<Categorisation, 'categoryId' | 'source' | 'ruleId'>;
 
+// Also the `transaction_source` enum in the database: adding one here needs a migration.
+// `gmail`: a bank email. `manual`: added by hand (cash), or a part of a split transaction.
+export const TRANSACTION_SOURCES = ['gmail', 'manual'] as const;
+export type TransactionSource = (typeof TRANSACTION_SOURCES)[number];
+
 export interface NewTransaction {
   userId: string;
   accountType: string;
@@ -24,9 +29,31 @@ export interface NewTransaction {
   kind: TransactionKind;
   transactionType: string;
   reserved: boolean;
-  source: 'gmail';
+  source: TransactionSource;
   sourceRef: string;
   category: CategoryAssignment;
+  // A part of a split: the transaction it was split from.
+  splitOf?: string | null;
+}
+
+// Everything a copy of a transaction needs (a split's parts take after their original).
+export interface FullTransaction extends StoredTransaction {
+  accountType: string;
+  descriptionRaw: string;
+  kind: TransactionKind;
+  transactionType: string;
+  reserved: boolean;
+  isDeleted: boolean;
+  splitOf: string | null;
+}
+
+export interface TransactionMatch {
+  // The whole normalised description, exactly.
+  description?: string;
+  categoryId?: string;
+  from?: string;
+  // Exclusive.
+  to?: string;
 }
 
 export interface StoredTransaction {
@@ -54,6 +81,16 @@ export interface TransactionStore {
   // Insert unless (source, sourceRef) already exists. Returns the row's id either way.
   insertIfNew(tx: NewTransaction): Promise<{ id: string; created: boolean }>;
   findById(userId: string, id: string): Promise<StoredTransaction | null>;
+  // Like findById with every column, and excluded rows too.
+  findFull(userId: string, id: string): Promise<FullTransaction | null>;
+  // Live rows with this description and/or category, in a date range when given.
+  findMatching(userId: string, match: TransactionMatch): Promise<StoredTransaction[]>;
+  // Sets the category of live rows whatever they were before. Returns how many changed.
+  setCategoryMany(userId: string, ids: string[], category: CategoryAssignment): Promise<number>;
+  // The live parts of a split transaction.
+  listSplitParts(userId: string, originalId: string): Promise<StoredTransaction[]>;
+  // Soft delete or restore. Returns how many rows it found.
+  setExcluded(userId: string, ids: string[], excluded: boolean): Promise<number>;
   // Uncategorised rows on other accounts with the opposite amount, within `windowDays`.
   findTransferCandidates(
     userId: string,

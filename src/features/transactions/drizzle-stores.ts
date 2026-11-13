@@ -1,9 +1,9 @@
-import { and, asc, desc, eq, gt, gte, inArray, isNull, lte, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, sql } from 'drizzle-orm';
 import type { Database } from '@/db/client';
 import { categories, categoryRules, ingestedMessages, mailboxConnections, transactions } from '@/db/schema';
 import type { CategoryRule } from '@/features/categorisation/types';
 import { centsToDecimal, decimalToCents } from './money';
-import type { CategoryStore, IngestedMessageStore, Stores, TransactionStore, UncategorisedGroup } from './ports';
+import type { CategoryStore, FullTransaction, IngestedMessageStore, StoredTransaction, Stores, TransactionStore, UncategorisedGroup } from './ports';
 
 // `database` may be an open transaction, which is how UnitOfWork scopes these to one commit.
 export function createDrizzleStores(database: Database): Stores {
@@ -16,6 +16,20 @@ export function createDrizzleStores(database: Database): Stores {
 
 const live = (userId: string) => and(eq(transactions.userId, userId), eq(transactions.isDeleted, false));
 const uncategorised = eq(transactions.categorySource, 'none');
+
+const storedColumns = {
+  id: transactions.id,
+  occurredOn: transactions.occurredOn,
+  amount: transactions.amount,
+  accountLast4: transactions.accountLast4,
+  descriptionNormalised: transactions.descriptionNormalised,
+  categoryId: transactions.categoryId,
+  categorySource: transactions.categorySource,
+};
+
+function toStored<T extends { amount: string }>({ amount, ...row }: T): Omit<T, 'amount'> & { amountCents: number } {
+  return { ...row, amountCents: decimalToCents(amount) };
+}
 
 function transactionStore(db: Database): TransactionStore {
   return {
@@ -39,6 +53,7 @@ function transactionStore(db: Database): TransactionStore {
           reserved: tx.reserved,
           source: tx.source,
           sourceRef: tx.sourceRef,
+          splitOf: tx.splitOf ?? null,
         })
         .onConflictDoNothing({ target: [transactions.source, transactions.sourceRef] })
         .returning({ id: transactions.id });
@@ -53,18 +68,73 @@ function transactionStore(db: Database): TransactionStore {
 
     async findById(userId, id) {
       const [row] = await db
-        .select({
-          id: transactions.id,
-          occurredOn: transactions.occurredOn,
-          amount: transactions.amount,
-          accountLast4: transactions.accountLast4,
-          descriptionNormalised: transactions.descriptionNormalised,
-          categoryId: transactions.categoryId,
-          categorySource: transactions.categorySource,
-        })
+        .select(storedColumns)
         .from(transactions)
         .where(and(live(userId), eq(transactions.id, id)));
-      return row ? { ...row, amountCents: decimalToCents(row.amount) } : null;
+      return row ? (toStored(row) satisfies StoredTransaction) : null;
+    },
+
+    async findFull(userId, id) {
+      const [row] = await db
+        .select({
+          ...storedColumns,
+          accountType: transactions.accountType,
+          descriptionRaw: transactions.descriptionRaw,
+          kind: transactions.kind,
+          transactionType: transactions.transactionType,
+          reserved: transactions.reserved,
+          isDeleted: transactions.isDeleted,
+          splitOf: transactions.splitOf,
+        })
+        .from(transactions)
+        .where(and(eq(transactions.userId, userId), eq(transactions.id, id)));
+      return row ? (toStored(row) satisfies FullTransaction) : null;
+    },
+
+    async findMatching(userId, match) {
+      const rows = await db
+        .select(storedColumns)
+        .from(transactions)
+        .where(
+          and(
+            live(userId),
+            match.description === undefined ? undefined : eq(transactions.descriptionNormalised, match.description),
+            match.categoryId === undefined ? undefined : eq(transactions.categoryId, match.categoryId),
+            match.from ? gte(transactions.occurredOn, match.from) : undefined,
+            match.to ? lt(transactions.occurredOn, match.to) : undefined,
+          ),
+        )
+        .orderBy(desc(transactions.occurredOn), desc(transactions.id));
+      return rows.map(toStored);
+    },
+
+    async setCategoryMany(userId, ids, category) {
+      if (ids.length === 0) return 0;
+      const updated = await db
+        .update(transactions)
+        .set({ categoryId: category.categoryId, categorySource: category.source, ruleId: category.ruleId })
+        .where(and(live(userId), inArray(transactions.id, ids)))
+        .returning({ id: transactions.id });
+      return updated.length;
+    },
+
+    async listSplitParts(userId, originalId) {
+      const rows = await db
+        .select(storedColumns)
+        .from(transactions)
+        .where(and(live(userId), eq(transactions.splitOf, originalId)))
+        .orderBy(asc(transactions.createdAt), asc(transactions.id));
+      return rows.map(toStored);
+    },
+
+    async setExcluded(userId, ids, excluded) {
+      if (ids.length === 0) return 0;
+      const updated = await db
+        .update(transactions)
+        .set({ isDeleted: excluded })
+        .where(and(eq(transactions.userId, userId), inArray(transactions.id, ids)))
+        .returning({ id: transactions.id });
+      return updated.length;
     },
 
     async findTransferCandidates(userId, near, windowDays) {

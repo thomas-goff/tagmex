@@ -18,6 +18,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { ACCOUNT_LABEL_KINDS } from '@/features/accounts/labels';
 import { TRANSACTION_KINDS } from '@/features/bank-email/types';
+import { TRANSACTION_SOURCES } from '@/features/transactions/ports';
 import {
   CATEGORY_KINDS,
   CATEGORY_SOURCES,
@@ -88,8 +89,8 @@ export const ruleMatchType = pgEnum('rule_match_type', RULE_MATCH_TYPES);
 export const ruleOrigin = pgEnum('rule_origin', RULE_ORIGINS);
 export const ruleDirection = pgEnum('rule_direction', RULE_DIRECTIONS);
 export const transactionKind = pgEnum('transaction_kind', TRANSACTION_KINDS);
-// `apple_pay` arrives in phase 4.
-export const transactionSource = pgEnum('transaction_source', ['gmail']);
+// `manual`: added by hand (cash, or something the bank never emailed) and the parts of a split.
+export const transactionSource = pgEnum('transaction_source', TRANSACTION_SOURCES);
 
 // Uncategorised is category_id = null, not a row. Transfer and Income are found by `kind` (one
 // system category per kind), never by name, so renaming them is safe.
@@ -107,6 +108,10 @@ export const categories = pgTable(
     isSystem: boolean('is_system').notNull().default(false),
     // Income categories only: a credit here can open a salary cycle (see @/features/cycle).
     isSalary: boolean('is_salary').notNull().default(false),
+    // Expense categories only: money moved here is saved, not spent (see @/features/budget/summary).
+    isSavings: boolean('is_savings').notNull().default(false),
+    // Hidden from pickers and refused as a new category; what's already in it still counts.
+    isArchived: boolean('is_archived').notNull().default(false),
     sortOrder: integer('sort_order').notNull().default(0),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
   },
@@ -149,7 +154,7 @@ export const transactions = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     userId: text('user_id').notNull(),
-    // e.g. CHEQ, CCRD, SAVS.
+    // e.g. CHEQ, CCRD, SAVE; CASH for transactions added by hand.
     accountType: text('account_type').notNull(),
     accountLast4: text('account_last4').notNull(),
     // The bank sends a date with no time, so this is a calendar date, not a timestamp.
@@ -168,9 +173,11 @@ export const transactions = pgTable(
     // A card hold rather than a settled amount.
     reserved: boolean('reserved').notNull().default(false),
     source: transactionSource('source').notNull(),
-    // Gmail message id for `gmail`.
+    // Gmail message id for `gmail`; a generated id for `manual`.
     sourceRef: text('source_ref').notNull(),
     isDeleted: boolean('is_deleted').notNull().default(false),
+    // A part of a split: the transaction it was split from, which is excluded while its parts stand.
+    splitOf: uuid('split_of').references((): AnyPgColumn => transactions.id, { onDelete: 'cascade' }),
     // A suggested category for an uncategorised row (suggest_category), offered on #needs-review
     // with an Accept button, never applied by itself. suggested_at with no category means "looked
     // at, not sure". Either way the row has been looked at, so the next pass skips it.
@@ -183,6 +190,7 @@ export const transactions = pgTable(
     unique('transactions_source_ref_unique').on(t.source, t.sourceRef),
     index('transactions_user_occurred_idx').on(t.userId, t.occurredOn),
     index('transactions_user_category_idx').on(t.userId, t.categoryId),
+    index('transactions_split_of_idx').on(t.splitOf),
   ],
 ).enableRLS();
 

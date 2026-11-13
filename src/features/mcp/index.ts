@@ -3,9 +3,9 @@ import 'server-only';
 import { db } from '@/db';
 import { accountLabelRepo } from '@/features/accounts';
 import { budget, budgetRepo } from '@/features/budget';
-import { postMessage } from '@/features/notifications/discord';
-import { reviewMessages } from '@/features/notifications/review-messages';
-import { syncMailbox } from '@/features/sync/sync-mailbox';
+import { commands } from '@/features/commands';
+import { syncStatusRepo } from '@/features/sync/status';
+import { mailboxSync } from '@/features/sync';
 import { ledger } from '@/features/transactions';
 import { resolveAppUserId } from '@/features/users/resolve';
 import { createAuditLog } from './audit';
@@ -14,15 +14,15 @@ import { createMcpEndpoint, resourceMetadataUrl, resourceUrl } from './server';
 
 export const handleMcpRequest = createMcpEndpoint({
   tools: {
+    commands,
     budget,
     repo: budgetRepo,
     accounts: accountLabelRepo,
-    ledger,
+    uncategorised: ledger.stores.transactions,
+    sync: syncStatusRepo,
     audit: createAuditLog(db),
-    review: reviewMessages,
-    discord: { post: (channel, payload) => postMessage(channel, payload) },
     async reprocessFailed(userId) {
-      const { fetched, parsed, ignored, failed } = await syncMailbox(userId, { retryFailed: true });
+      const { fetched, parsed, ignored, failed } = await mailboxSync.run(userId, { retryFailed: true });
       return { fetched, parsed, ignored, failed };
     },
   },

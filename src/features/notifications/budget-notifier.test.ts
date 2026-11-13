@@ -14,11 +14,11 @@ import { budgetStanding } from '@/features/budget/standing';
 
 const starts = [{ transactionId: 'sal', occurredOn: '2026-10-30', amountCents: 30_713_54 }];
 const lines: BudgetLine[] = [
-  { categoryId: 'g', categoryName: 'Groceries', categoryEmoji: '🛒', expenseType: 'dynamic', allocatedCents: 1000_00, expectedDay: null, isActive: true, sortOrder: 0 },
-  { categoryId: 'i', categoryName: 'Insurance', categoryEmoji: '🛡️', expenseType: 'static', allocatedCents: 900_00, expectedDay: 1, isActive: true, sortOrder: 1 },
+  { categoryId: 'g', categoryName: 'Groceries', categoryEmoji: '🛒', expenseType: 'dynamic', allocatedCents: 1000_00, expectedDay: null, isActive: true, sortOrder: 0, isSavings: false },
+  { categoryId: 'i', categoryName: 'Insurance', categoryEmoji: '🛡️', expenseType: 'static', allocatedCents: 900_00, expectedDay: 1, isActive: true, sortOrder: 1, isSavings: false },
 ];
 const spend = (cents: number): LedgerRow[] => [
-  { id: 't', occurredOn: '2026-10-31', amountCents: -cents, categoryId: 'g', categoryKind: 'expense', categoryName: 'Groceries', categoryEmoji: '🛒' },
+  { id: 't', occurredOn: '2026-10-31', amountCents: -cents, categoryId: 'g', categoryKind: 'expense', categoryName: 'Groceries', categoryEmoji: '🛒', categoryIsSavings: false },
 ];
 
 // A payload's text as Discord shows it: through the Components V2 layout.
@@ -201,13 +201,33 @@ describe('budget standing on transaction lines', () => {
 
 describe('settled static items', () => {
   const insurance = (cents: number): LedgerRow[] => [
-    { id: 'ins', occurredOn: '2026-11-01', amountCents: -cents, categoryId: 'i', categoryKind: 'expense', categoryName: 'Insurance', categoryEmoji: '🛡️' },
+    { id: 'ins', occurredOn: '2026-11-01', amountCents: -cents, categoryId: 'i', categoryKind: 'expense', categoryName: 'Insurance', categoryEmoji: '🛡️', categoryIsSavings: false },
   ];
 
   test('a debit order paid at more than its budget gives no threshold alert', () => {
     const s = summaryOn('2026-11-10', insurance(920_00));
     assert.equal(s.categories.find((c) => c.categoryId === 'i')!.status, 'settled');
     assert.deepEqual(budgetAlerts(s, null), []);
+  });
+
+  test('a debit order that cost far more than budgeted alerts once, as a warning rather than overspending', () => {
+    const s = summaryOn('2026-11-10', insurance(1900_00));
+    assert.equal(s.categories.find((c) => c.categoryId === 'i')!.status, 'settled');
+    const alerts = budgetAlerts(s, null);
+    assert.deepEqual(alerts.map((a) => [a.kind, a.dedupeKey]), [['static_above_budget', 'static_above:2026-10-30:i']]);
+    assert.match(payloadText(alerts[0]!.payload), /Insurance cost more than budgeted\n✅ Paid R1,900\.00 \(R1,000\.00 above budget\)\nBudgeted R900\.00/);
+  });
+
+  test('a part-paid debit order shows what is still to come', () => {
+    const s = summaryOn('2026-11-10', insurance(400_00));
+    const text = digestText(s);
+    assert.match(text, /Still to come · R500\.00\*\*\n🛡️ Insurance R500\.00 \(R400\.00 paid\) · \*\*late\*\* \(due Sun 1 Nov\)/);
+    assert.match(text, /Paid · R400\.00\*\*\n🛡️ Insurance R400\.00 of R900\.00/);
+  });
+
+  test('a salary-landed recap leaves out a cycle that was only tracked part-way', () => {
+    const fresh = summaryOn('2026-10-31', []);
+    assert.doesNotMatch(payloadText(budgetAlerts(fresh, { ...fresh, hasFullData: false })[0]!.payload), /Last cycle/);
   });
 
   test('a dynamic item over budget still alerts', () => {
@@ -234,7 +254,7 @@ describe('budget messages', () => {
   test('digest has yesterday, uncategorised, the budgets, days to salary and debit orders', () => {
     const s = summaryOn('2026-11-10', [
       ...spend(200_00),
-      { id: 'u', occurredOn: '2026-11-02', amountCents: -72_00, categoryId: null, categoryKind: null, categoryName: null, categoryEmoji: null },
+      { id: 'u', occurredOn: '2026-11-02', amountCents: -72_00, categoryId: null, categoryKind: null, categoryName: null, categoryEmoji: null, categoryIsSavings: false },
     ]);
     const payloads = digestPayloads(s);
     assert.equal(payloads.length, 2);
@@ -258,11 +278,11 @@ describe('budget messages', () => {
 
   test('budgets under are listed, then those over, most over first', () => {
     const extra: BudgetLine[] = [
-      { categoryId: 'p', categoryName: 'Petrol', categoryEmoji: '⛽', expenseType: 'dynamic', allocatedCents: 500_00, expectedDay: null, isActive: true, sortOrder: 2 },
-      { categoryId: 'c', categoryName: 'Clothing', categoryEmoji: '👕', expenseType: 'dynamic', allocatedCents: 100_00, expectedDay: null, isActive: true, sortOrder: 3 },
-      { categoryId: 'e', categoryName: 'Eating Out', categoryEmoji: '🍔', expenseType: 'dynamic', allocatedCents: 300_00, expectedDay: null, isActive: true, sortOrder: 4 },
+      { categoryId: 'p', categoryName: 'Petrol', categoryEmoji: '⛽', expenseType: 'dynamic', allocatedCents: 500_00, expectedDay: null, isActive: true, sortOrder: 2, isSavings: false },
+      { categoryId: 'c', categoryName: 'Clothing', categoryEmoji: '👕', expenseType: 'dynamic', allocatedCents: 100_00, expectedDay: null, isActive: true, sortOrder: 3, isSavings: false },
+      { categoryId: 'e', categoryName: 'Eating Out', categoryEmoji: '🍔', expenseType: 'dynamic', allocatedCents: 300_00, expectedDay: null, isActive: true, sortOrder: 4, isSavings: false },
     ];
-    const row = (id: string, categoryId: string, categoryName: string, amountCents: number): LedgerRow => ({ id, occurredOn: '2026-11-05', amountCents, categoryId, categoryKind: 'expense', categoryName, categoryEmoji: null });
+    const row = (id: string, categoryId: string, categoryName: string, amountCents: number): LedgerRow => ({ id, occurredOn: '2026-11-05', amountCents, categoryId, categoryKind: 'expense', categoryName, categoryEmoji: null, categoryIsSavings: false });
     const today = '2026-11-10';
     const cycle = cycleContaining(today, starts, 31);
     const s = summariseCycle({
@@ -278,7 +298,7 @@ describe('budget messages', () => {
 
   test('paid debit orders go in the debit orders message, with their total', () => {
     const s = summaryOn('2026-11-10', [
-      { id: 'ins', occurredOn: '2026-11-01', amountCents: -900_00, categoryId: 'i', categoryKind: 'expense', categoryName: 'Insurance', categoryEmoji: '🛡️' },
+      { id: 'ins', occurredOn: '2026-11-01', amountCents: -900_00, categoryId: 'i', categoryKind: 'expense', categoryName: 'Insurance', categoryEmoji: '🛡️', categoryIsSavings: false },
     ]);
     const [budgets, debits] = digestPayloads(s).map(shown);
     assert.doesNotMatch(budgets!, /Insurance/);
@@ -296,6 +316,7 @@ describe('budget messages', () => {
       expectedDay: null,
       isActive: true,
       sortOrder: i,
+      isSavings: false,
     }));
     const today = '2026-11-10';
     const cycle = cycleContaining(today, starts, 31);
@@ -320,7 +341,7 @@ describe('budget messages', () => {
   });
 
   test("digest sums up yesterday's money out", () => {
-    const groceries = (id: string, occurredOn: string, amountCents: number): LedgerRow => ({ id, occurredOn, amountCents, categoryId: 'g', categoryKind: 'expense', categoryName: 'Groceries', categoryEmoji: '🛒' });
+    const groceries = (id: string, occurredOn: string, amountCents: number): LedgerRow => ({ id, occurredOn, amountCents, categoryId: 'g', categoryKind: 'expense', categoryName: 'Groceries', categoryEmoji: '🛒', categoryIsSavings: false });
     const busy = summaryOn('2026-11-10', [groceries('a', '2026-11-09', -150_00), groceries('b', '2026-11-09', -100_00), groceries('c', '2026-11-08', -40_00)]);
     assert.match(digestText(busy), /Yesterday: R250\.00 out \(2 transactions\)/);
     assert.match(digestText(summaryOn('2026-11-10', [])), /Yesterday: nothing out/);

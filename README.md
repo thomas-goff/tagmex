@@ -6,7 +6,12 @@ Next.js 16 (App Router) + Drizzle ORM + Postgres + Zod.
 npm install
 npm run dev
 npm test        # unit tests (node:test via tsx)
+npm run lint
+npm run typecheck
 ```
+
+CI (`.github/workflows/ci.yml`) runs lint, typecheck and the tests on every pull request and on
+`main`. It needs no secrets: only Vercel's production build touches the database.
 
 ## Env vars
 
@@ -85,7 +90,10 @@ account within 3 days) → uncategorised (`category_id` null). Discord shows the
 | `src/features/transactions/ports.ts` | Storage interfaces the services depend on |
 | `src/features/transactions/drizzle-stores.ts` | Their Drizzle implementation |
 | `src/features/transactions/record-transaction.ts` | Parsed email → categorised ledger row (sync + backfill) |
-| `src/features/transactions/correct-category.ts` | Correct a category, learn a rule, apply it to past uncategorised rows |
+| `src/features/transactions/correct-category.ts` | Correct a category, learn a rule, apply it to past uncategorised rows; re-categorise rows that are already filed |
+| `src/features/transactions/manual-entries.ts` | Transactions added by hand (cash) and the parts of a split |
+| `src/features/bank-email/registry.ts` | Which parser reads which bank's emails, by sender. A second bank is one more entry in `src/features/sync/index.ts` |
+| `src/features/sync/mailbox-sync.ts` | One sync run, with everything it touches injected (mailbox, parsers, bookkeeping, ledger, announcements); `drizzle-ingest-store.ts`, `announce.ts` and `index.ts` wire the real ones |
 | `src/features/transactions/ledger.ts` | Wires services to a database (app: `index.ts`; scripts: their own connection) |
 
 To add a merchant rule for everyone, add it to `DEFAULT_MERCHANT_RULES` (with a test in
@@ -144,22 +152,12 @@ export CRON_SECRET=<the CRON_SECRET from Vercel>
 
 ### Correcting categories
 
-```bash
-# Uncategorised, grouped by description, biggest group first
-curl -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/transactions/uncategorised"
-
-# Category names
-curl -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/categories"
-
-# Categorise one transaction (use a group's latestTransactionId). This learns a rule for that exact
-# description and applies it to the rest of the group. Rows you or a rule already categorised are
-# never changed. Response: appliedTo = how many others it fixed.
-curl -X POST -H "Authorization: Bearer $CRON_SECRET" -H "Content-Type: application/json" \
-  -d '{"category": "Groceries"}' "$APP_URL/api/transactions/<transaction-id>/category"
-```
-
-Correcting the same description again re-points its rule. These routes are interim, and phase 3's
-MCP tools replace them.
+Ask Claude ("help me categorise what's uncategorised"), use the dropdown on a #needs-review
+message, or the Transactions page of the dashboard. All three run the same command: it sets the
+category, learns a rule for that exact description and applies it to the other uncategorised
+transactions with it. Rows you or a rule already categorised are never changed that way; to move
+those, ask Claude to re-categorise them (`recategorise_transactions`). Correcting the same
+description again re-points its rule.
 
 ### Checks (Supabase SQL editor)
 
@@ -194,27 +192,49 @@ Pennyworth, a butler who keeps Master Goff's books. The same numbers are on the 
   and raises "salary overdue". A second salary-like credit within 20 days is income, not a cycle.
 - **Budget items**: one per expense category (created at R0 automatically), `static` (debit
   orders, with an expected day), `dynamic` or `irregular`, with an allocation per cycle.
-- **Status** per category: a static item paid in full is **settled**, never over budget, even if
-  the debit order cost more (that difference is noted, and a tip suggests updating the budget);
-  part-paid or unpaid static items are **pending**. Dynamic and irregular items are **on track**,
-  **warning** from 80% and **over** from 100%. Only dynamic and irregular items raise 80% / 100%
-  alerts.
+- **Status** per category: a static item paid in full (within 5% of its allocation, so R995 of
+  R1,000 is paid) is **settled**, never over budget, even if the debit order cost more (that
+  difference is noted, and a tip suggests updating the budget; one that cost 20% more or above
+  also raises a warning and a #budget alert); part-paid or unpaid static items are **pending**,
+  and what is still to come on them is the rest of the allocation. Dynamic and irregular items are
+  **on track**, **warning** from 80% and **over** from 100%. Only dynamic and irregular items
+  raise 80% / 100% alerts.
+- **Savings**: an expense category flagged as savings (`categories.is_savings`; a category called
+  Savings is flagged by migration 0012, any other with `update_category` or the Budget page).
+  Money moved into it is **saved**, not spent: it is left out of `spent`, reported as `saved`,
+  and its item is settled or pending like a debit order.
 - **Emoji**: every category has one (`categories.emoji`, defaults from migration 0009; 🏷️ when
   unset), shown on Discord and the dashboard. Change it on the dashboard or with
   `set_category_emoji`.
-- **Numbers** are computed on read, never stored: spent per category (refunds net off), remaining,
-  pending debit orders (static items with no money out yet), discretionary left (dynamic +
-  irregular), daily allowance, income and net. Transfers count as neither. Uncategorised
-  transactions are left out of every number and reported alongside so you know.
+- **Numbers** are computed on read, never stored (definitions at the top of
+  `src/features/budget/summary.ts`): spent per category (refunds net off), remaining, saved,
+  pending debit orders, income and net (income - spent). **Left** = income - spent - saved -
+  debit orders still to come: the money not yet spoken for. **Discretionary left** is the smaller
+  of that and the unspent dynamic and irregular budgets, so overspending anywhere (over a budget,
+  in a category with no budget, a debit order that cost more) comes off it, and it can go
+  negative. The **daily allowance** is discretionary left over the days to payday, never below
+  R0. Transfers count as neither. Uncategorised transactions are left out of every number and
+  reported alongside so you know.
+- **History**: nothing is compared against a cycle from before tracking began. A cycle that
+  started before the ledger's first transaction is marked partial and left out of averages, the
+  "vs last cycle" and savings-rate tips, and the salary-landed recap; the trend never goes back
+  further than the ledger does.
+- **Balances**: each bank email's "Available" figure is kept (`transactions.balance_after`), and
+  the latest per account shows in `list_accounts` and on the Settings page. For a credit card it
+  is the credit still available. It is only as fresh as that account's last email.
+- **By hand**: a transaction the bank never emailed (cash) can be added (`add_transaction`,
+  account `CASH …0000` unless one is named), and one transaction can be split between categories
+  (`split_transaction`): the original is excluded and its parts stand in for it; restoring the
+  original undoes the split.
 
 ### Code map
 
 | Where | What |
 |---|---|
 | `src/features/cycle/` | Pure: dates in SAST, SA holidays, salary detection, cycle boundaries |
-| `src/features/budget/` | Pure maths (`summary`, `trend`, `tips`), repo (cents at the boundary), `service.ts` (the one service layer) |
-| `src/features/commands/` | The writes (categorise, budgets, emoji, salary, notifications, exclude), shared by the MCP tools and the dashboard |
-| `src/features/mcp/` | Clerk token check (`auth.ts`, `clerk.ts`), tool wrapper (`tool.ts`: rate limit, audit, errors), tools in `tools/read.ts` and `tools/write.ts` |
+| `src/features/budget/` | Pure maths (`summary`, `trend`, `tips`), `service.ts` (the one service layer), and the repo in three parts (cents at the boundary): `settings-repo`, `category-repo` (categories, budget items, rules), `transaction-repo` (the budget's view of the ledger), composed in `repo.ts` |
+| `src/features/commands/` | Every write (categorise and re-categorise, categories, rules, budgets, salary, notifications, exclude, add, split, account labels, posting a status), shared by the MCP tools, the dashboard and the Discord buttons. `test-support.ts` is an in-memory tagmex the tests run the real commands over |
+| `src/features/mcp/` | Clerk token check (`auth.ts`, `clerk.ts`), tool wrapper (`tool.ts`: rate limit, audit, output schema check, errors), tools in `tools/read.ts` and `tools/write.ts` (thin adapters over the service and the commands), output shapes in `format.ts`, prompts in `prompts.ts` |
 | `src/features/notifications/` | Discord channels, Pennyworth's messages (`embeds.ts`) and their card layout (`layout.ts`), digest and alert messages, claim-before-post dedupe, #needs-review edits, #system alerts |
 | `src/app/api/mcp/` | The MCP endpoint (stateless streamable HTTP) |
 | `src/app/.well-known/` | OAuth protected resource metadata (points clients at Clerk) |
@@ -228,7 +248,7 @@ Pennyworth, a butler who keeps Master Goff's books. The same numbers are on the 
 |---|---|---|
 | #transactions | Each categorised transaction: amount, merchant, category, its budget bar (or ✅ Settled) and days to payday | `DISCORD_WEBHOOK_URL` |
 | #needs-review | Each uncategorised transaction, with a category dropdown and Exclude (once [buttons](#needs-review-buttons) are set up). Shows Claude's suggestion with an Accept button; ticked ✅ with its category once it's sorted, however it's sorted | `DISCORD_REVIEW_WEBHOOK_URL` |
-| #budget | Daily digest from 07:00 SAST, 80% / 100% category alerts, salary landed + last cycle recap, salary overdue | `DISCORD_BUDGET_WEBHOOK_URL` |
+| #budget | Daily digest from 07:00 SAST, 80% / 100% category alerts, a debit order that cost far more than budgeted, salary landed + last cycle recap, salary overdue | `DISCORD_BUDGET_WEBHOOK_URL` |
 | #system | Parse failures, sync / Gmail token failures (once a day per error, with a ping), no successful sync for 2h (ping), heartbeat, dry runs | `DISCORD_SYSTEM_WEBHOOK_URL` |
 
 Every message is a card posted as **Pennyworth** (the webhook username), using Discord's
@@ -325,17 +345,38 @@ change: run `npm run users:allow -- --email you@example.com --unlink` and sign i
 ### MCP tools
 
 Read: `get_budget_overview` (start here), `list_transactions`, `get_uncategorised`,
-`list_categories`, `list_accounts`, `get_budget_items`, `get_pending_debit_orders`,
-`get_spending_trend`, `get_tips`, `get_sync_status`. Write: `categorise_transaction` (learns a rule;
-over 25 similar rows needs `confirm: true`), `suggest_category` (shows a guess, or "not sure", on
-#needs-review with an Accept button; never categorises), `create_category`, `set_category_emoji`, `set_budget_item`,
-`set_salary_config`, `set_notification_settings`, `exclude_transaction` / `restore_transaction`
-(soft delete), `set_account_label` (names an account such as `CHEQ …1297`, or the counterparty
-behind description text; shown next to transactions, display only), `post_status_to_discord`
-(the digest-style budget status and/or a note from Claude, to #budget; at most 5 posts an hour),
-`reprocess_failed_messages`. No hard deletes, no SQL, every query scoped to the signed-in user.
-The dashboard's forms run the same commands (`src/features/commands/`), with the same rules.
-Every call is written to `mcp_audit_log` (kept 90 days) and limited to 60 a minute.
+`list_categories`, `list_accounts` (with each account's latest balance), `get_budget_items`,
+`get_pending_debit_orders`, `get_spending_trend`, `get_tips`, `get_sync_status`, `list_rules`.
+
+Write:
+
+| Tool | What |
+|---|---|
+| `categorise_transaction` | Sets a category and learns a rule; over 25 similar rows needs `confirm: true` |
+| `recategorise_transactions` | Moves transactions that are already filed: by description (re-points its rule), by category, or both, in a cycle or over all history; over 25 rows needs `confirm: true` |
+| `suggest_category` | Shows a guess, or "not sure", on #needs-review with an Accept button; never categorises |
+| `create_category`, `set_category_emoji` | A new category (optionally a savings one); its emoji |
+| `update_category` | Rename, archive (hidden from pickers, nothing new filed under it, budget off) or mark as savings |
+| `merge_categories` | Folds one category into another (transactions and rules move, the source is archived); always previews first |
+| `list_rules` / `delete_rule` | The learned and built-in rules; forget a learned one |
+| `set_budget_item`, `set_salary_config`, `set_notification_settings` | Budgets, salary detection, Discord digest and alerts |
+| `exclude_transaction` / `restore_transaction` | Soft delete and undo; restoring a split transaction undoes the split |
+| `add_transaction` | A transaction the bank never emailed (cash), categorised by the rules unless a category is given |
+| `split_transaction` | Divides one transaction between categories; the parts must add up exactly |
+| `set_account_label` | Names an account such as `CHEQ …1297`, or the counterparty behind description text; display only |
+| `post_status_to_discord` | The digest-style budget status and/or a note from Claude, to #budget; at most 5 posts an hour |
+| `reprocess_failed_messages` | Re-parses failed bank emails after a parser fix |
+
+No transaction is ever hard-deleted and nothing takes SQL; every query is scoped to the signed-in
+user. The only thing that is deleted outright is a learned rule (`delete_rule`), which
+categorising a transaction recreates. The dashboard's forms and the Discord buttons run the same
+commands (`src/features/commands/`), with the same rules. Every call is written to `mcp_audit_log`
+(kept 90 days) and limited to 60 a minute.
+
+Every tool declares an **output schema**: clients see the shape of its structured result, and a
+result that doesn't match it never leaves the server (`tool.ts`). The server also offers three
+**prompts** (in Claude, under the connector's prompts): `weekly_review`, `sort_inbox` and
+`plan_next_cycle` (optionally with a savings target).
 
 ### Checks (Supabase SQL editor)
 

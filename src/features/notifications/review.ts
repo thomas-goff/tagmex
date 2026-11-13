@@ -3,7 +3,7 @@ import type { Database } from '@/db/client';
 import { discordMessages } from '@/db/schema';
 import { UNCATEGORISED_LABEL } from '@/features/sync/format';
 import type { DiscordChannel, DiscordMessage } from './discord';
-import { resolvedReviewPayload, suggestedReviewPayload, type DiscordPayload } from './embeds';
+import { categoryTag, resolvedReviewPayload, suggestedReviewPayload, type DiscordPayload } from './embeds';
 import { reviewComponents, type ReviewCategory } from './review-components';
 
 // #needs-review is an inbox: one message per uncategorised transaction, rewritten once it's
@@ -37,6 +37,23 @@ export function resolvedReviewContent(original: string, outcome: string) {
   return content.length > DISCORD_LIMIT ? `${content.slice(0, DISCORD_LIMIT - 1)}…` : content;
 }
 
+// How a transaction awaiting review was dealt with. The words and emoji are this layer's business.
+export type ReviewOutcome =
+  | { kind: 'categorised'; category: { name: string; emoji: string | null } }
+  | { kind: 'excluded' }
+  | { kind: 'split'; parts: number };
+
+export function outcomeText(outcome: ReviewOutcome) {
+  switch (outcome.kind) {
+    case 'categorised':
+      return categoryTag(outcome.category.name, outcome.category.emoji);
+    case 'excluded':
+      return '🗑️ excluded';
+    case 'split':
+      return `✂️ split into ${outcome.parts}`;
+  }
+}
+
 export interface ReviewSuggestion {
   category: ReviewCategory | null;
   note: string | null;
@@ -46,7 +63,7 @@ export interface ReviewMessages {
   record(userId: string, transactionId: string, messageId: string, payload: DiscordPayload): Promise<void>;
   // Edits the open review messages of these transactions to show the outcome. Never throws: a
   // stale message isn't worth failing a categorisation over.
-  resolve(userId: string, transactionIds: string[], outcome: string): Promise<number>;
+  resolve(userId: string, transactionIds: string[], outcome: ReviewOutcome): Promise<number>;
   // Edits the open review messages of these transactions to show a suggestion, with the controls
   // rebuilt to offer it. Never throws, like resolve.
   suggest(userId: string, transactionIds: string[], suggestion: ReviewSuggestion, categories: readonly ReviewCategory[]): Promise<number>;
@@ -84,8 +101,9 @@ export function createReviewMessages(
         });
     },
 
-    async resolve(userId, transactionIds, outcome) {
+    async resolve(userId, transactionIds, result) {
       if (transactionIds.length === 0) return 0;
+      const outcome = outcomeText(result);
       let edited = 0;
       try {
         for (const m of await openMessages(userId, transactionIds)) {

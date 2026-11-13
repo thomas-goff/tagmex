@@ -2,7 +2,8 @@ import type { BudgetStanding, Payday } from '@/features/budget/standing';
 import type { CategoryLine, CategoryStatus } from '@/features/budget/summary';
 import { categoryEmoji, UNCATEGORISED_EMOJI } from '@/features/categorisation/emoji';
 import { shortDate } from '@/features/cycle/dates';
-import { escapeMarkdown, formatRand } from '@/features/sync/format';
+import { escapeMarkdown } from '@/features/sync/format';
+import { formatRand } from '@/features/transactions/money';
 
 // Discord messages from Pennyworth, a butler who keeps Master Goff's books, described as embeds:
 // discord.ts posts each embed as a Components V2 card (see ./layout). Short on purpose: the
@@ -293,7 +294,7 @@ export function backlogEmbed(items: TransactionInfo[], failed: number, extra?: s
 
 type DigestCategory = Pick<
   CategoryLine,
-  'name' | 'emoji' | 'expenseType' | 'allocatedCents' | 'spentCents' | 'remainingCents' | 'usedPct' | 'status' | 'isActive' | 'differenceCents'
+  'name' | 'emoji' | 'expenseType' | 'allocatedCents' | 'spentCents' | 'remainingCents' | 'usedPct' | 'status' | 'isActive' | 'differenceCents' | 'isSavings'
 >;
 
 export interface DigestInput {
@@ -308,7 +309,8 @@ export interface DebitOrdersInput {
   paydayProjected: boolean;
   salary: { amountCents: number; landedLabel: string } | null;
   categories: DigestCategory[];
-  pending: { name: string; emoji: string | null; allocatedCents: number; dueLabel: string | null; late: boolean }[];
+  // remainingCents: what's still to come; paidCents: what a part-paid one has paid so far.
+  pending: { name: string; emoji: string | null; remainingCents: number; paidCents: number; dueLabel: string | null; late: boolean }[];
   pendingTotalCents: number;
 }
 
@@ -356,7 +358,7 @@ export function digestEmbed(d: DigestInput, title = `☀️ Good morning, ${MAST
     lines.push(`${UNCATEGORISED_EMOJI} ${plural(d.uncategorised.count, 'transaction')} (${formatRand(Math.abs(d.uncategorised.outCents))}) ${d.uncategorised.count === 1 ? 'needs' : 'need'} a category`);
   }
 
-  const budgets = d.categories.filter((c) => c.isActive && c.allocatedCents > 0 && c.expenseType !== 'static');
+  const budgets = d.categories.filter((c) => c.isActive && c.allocatedCents > 0 && c.expenseType !== 'static' && !c.isSavings);
   const line = (c: DigestCategory, tail: string) => `${categoryEmoji(c.emoji)} ${escapeMarkdown(c.name)} \`${bar(c.usedPct ?? 0, 8)}\` ${c.usedPct}% · ${tail}`;
   const over = budgets
     .filter((c) => c.status === 'over')
@@ -387,14 +389,15 @@ export function debitOrdersEmbed(d: DebitOrdersInput, title = '🗓️ Payday & 
   const lines = [next, d.salary ? `Last salary ${formatRand(d.salary.amountCents)} on ${d.salary.landedLabel}` : 'No salary seen this cycle yet'];
 
   const fields = [];
-  const fixed = d.categories.filter((c) => c.isActive && c.expenseType === 'static' && c.allocatedCents > 0);
+  const fixed = d.categories.filter((c) => c.isActive && (c.expenseType === 'static' || c.isSavings) && c.allocatedCents > 0);
   if (d.pending.length > 0) {
     fields.push(
       listField(
         `🗓️ Still to come · ${formatRand(d.pendingTotalCents)}`,
         d.pending.map((p) => {
           const due = p.dueLabel ? (p.late ? ` · **late** (due ${p.dueLabel})` : ` · due ${p.dueLabel}`) : '';
-          return `${categoryTag(p.name, p.emoji)} ${formatRand(p.allocatedCents)}${due}`;
+          const paid = p.paidCents > 0 ? ` (${formatRand(p.paidCents)} paid)` : '';
+          return `${categoryTag(p.name, p.emoji)} ${formatRand(p.remainingCents)}${paid}${due}`;
         }),
       ),
     );
@@ -435,6 +438,15 @@ export function thresholdEmbed(c: BudgetStanding['category'], payday: Payday, pc
     title: over ? `🔴 ${name} is over budget` : `⚠️ ${name} is at ${c.usedPct}%`,
     description: [budgetText(c), paydayText(payday)].filter(Boolean).join('\n'),
     color: over ? COLOURS.red : COLOURS.amber,
+  };
+}
+
+// A debit order that settled for far more than its budget: not overspending, but worth a look.
+export function aboveBudgetEmbed(c: BudgetStanding['category']): DiscordEmbed {
+  return {
+    title: `⚠️ ${categoryEmoji(c.emoji)} ${escapeMarkdown(c.name)} cost more than budgeted`,
+    description: `${budgetText(c)}\nBudgeted ${formatRand(c.allocatedCents)}. If that's the new amount, update the budget.`,
+    color: COLOURS.amber,
   };
 }
 

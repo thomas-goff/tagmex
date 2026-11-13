@@ -4,7 +4,7 @@ import { budget, budgetRepo } from '@/features/budget';
 import { categoryEmoji, UNCATEGORISED_EMOJI } from '@/features/categorisation/emoji';
 import { addDays, isIsoDate } from '@/features/cycle/dates';
 import { shortDate } from '@/features/cycle/dates';
-import { formatRand } from '@/features/sync/format';
+import { formatRand } from '@/features/transactions/money';
 import styles from '../dashboard.module.css';
 import { CategoriseForm, ExcludeButton, type CategoryOption } from '../forms';
 import { cx } from '../ui';
@@ -46,7 +46,8 @@ export default async function Transactions({ searchParams }: PageProps<'/dashboa
     after && after.length === 2 && isIsoDate(after[0]!) ? { occurredOn: after[0]!, id: after[1]! } : null,
   );
 
-  const options: CategoryOption[] = categories.map((c) => ({ id: c.id, name: c.name, emoji: categoryEmoji(c.emoji) }));
+  // Archived categories aren't offered, here or anywhere.
+  const options: CategoryOption[] = categories.filter((c) => !c.isArchived).map((c) => ({ id: c.id, name: c.name, emoji: categoryEmoji(c.emoji) }));
   const query = (extra: Record<string, string>) =>
     new URLSearchParams(
       Object.entries({ cycle: cycle.id, category: categoryId, q: search, uncategorised: uncategorisedOnly ? '1' : undefined, excluded: showExcluded ? '1' : undefined, ...extra }).filter(
@@ -112,6 +113,7 @@ export default async function Transactions({ searchParams }: PageProps<'/dashboa
                   <td className={styles.desc}>
                     {t.categoryId ? categoryEmoji(t.categoryEmoji) : UNCATEGORISED_EMOJI} {t.description}
                     {t.reserved && <span className={styles.subtle}> · pending</span>}
+                    {t.splitOf && <span className={styles.subtle}> · part of a split</span>}
                   </td>
                   <td className={cx(styles.num, t.amountCents < 0 ? styles.out : styles.in)}>{formatRand(t.amountCents)}</td>
                   <td>

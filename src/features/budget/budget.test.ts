@@ -3,7 +3,7 @@ import { describe, test } from 'node:test';
 import { cycleContaining, cycleStatus, detectSalaryStarts, type Cycle } from '@/features/cycle/cycle';
 import { missingBudgetItems } from './ensure-items';
 import { suggestCategory } from './suggest';
-import { dateInCycle, summariseCycle } from './summary';
+import { dateInCycle, isWellAboveBudget, summariseCycle } from './summary';
 import { deriveTips } from './tips';
 import { spendingTrend } from './trend';
 import type { BudgetLine, LedgerRow } from './types';
@@ -27,6 +27,7 @@ const row = (occurredOn: string, amountCents: number, categoryId: string | null,
   categoryKind: categoryId === null ? null : kind,
   categoryName: categoryId,
   categoryEmoji: null,
+  categoryIsSavings: false,
 });
 
 const line = (categoryId: string, expenseType: BudgetLine['expenseType'], allocatedCents: number, over: Partial<BudgetLine> = {}): BudgetLine => ({
@@ -38,6 +39,7 @@ const line = (categoryId: string, expenseType: BudgetLine['expenseType'], alloca
   expectedDay: null,
   isActive: true,
   sortOrder: 0,
+  isSavings: false,
   ...over,
 });
 
@@ -79,12 +81,16 @@ describe('cycle summary', () => {
     assert.deepEqual(s.uncategorised, { count: 2, outCents: 72_00, inCents: 510_00 });
   });
 
-  test('pending debit orders: allocated static items with no money out yet', () => {
+  test('pending debit orders: static items not paid in full, with what is still to come', () => {
     assert.deepEqual(
-      s.pendingDebitOrders.map((p) => [p.name, p.expectedOn, p.late]),
-      [['Insurance', '2026-11-01', true]],
+      s.pendingDebitOrders.map((p) => [p.name, p.expectedOn, p.late, p.paidCents, p.remainingCents]),
+      [
+        ['Insurance', '2026-11-01', true, 0, 900_00],
+        // Part-paid: the rest of its allocation is still to come.
+        ['Utilities', '2026-11-26', false, 828_99, 1771_01],
+      ],
     );
-    assert.equal(s.pendingTotalCents, 900_00);
+    assert.equal(s.pendingTotalCents, 900_00 + 1771_01);
   });
 
   test("yesterday's money out is gross and leaves out transfers and income", () => {
@@ -100,15 +106,16 @@ describe('cycle summary', () => {
     assert.equal(summarise(october, '2026-11-05', [], false).yesterday, null);
   });
 
-  test('discretionary left ignores static items and overspending; allowance per day to payday', () => {
-    // Groceries 3550 + Clothing max(-200, 0).
+  test('with income to spare, discretionary left is the unspent flexible budgets; allowance per day to payday', () => {
+    // Groceries 3550 + Clothing max(-200, 0): the income beyond the budget covers the overspend.
+    assert.equal(s.leftCents, 30_713_54 - s.spentCents - s.pendingTotalCents);
     assert.equal(s.discretionaryLeftCents, 3550_00);
     assert.equal(s.status.daysToSalary, 25);
     assert.equal(s.dailyAllowanceCents, 142_00);
   });
 
   test('an empty cycle has nothing spent and everything left', () => {
-    const empty = summarise(november, '2026-10-30', []);
+    const empty = summarise(november, '2026-10-30', [row('2026-10-30', 30_713_54, 'Salary', 'income')]);
     assert.equal(empty.spentCents, 0);
     assert.equal(empty.discretionaryLeftCents, 5000_00);
     assert.equal(empty.pendingDebitOrders.length, 2);
@@ -122,7 +129,7 @@ describe('cycle summary', () => {
   });
 
   test('payday with no salary yet: allowance divides by one day, not zero', () => {
-    const payday = summarise(november, '2026-11-30', []);
+    const payday = summarise(november, '2026-11-30', [row('2026-10-30', 30_713_54, 'Salary', 'income')]);
     assert.equal(payday.status.daysToSalary, 0);
     assert.equal(payday.dailyAllowanceCents, 5000_00);
   });
@@ -144,6 +151,9 @@ describe('category status', () => {
     assert.deepEqual(statusOf([row('2026-11-01', -2600_00, 'Utilities')]).Utilities, ['settled', 0]);
     assert.deepEqual(statusOf([row('2026-11-01', -2620_00, 'Utilities')]).Utilities, ['settled', 20_00]);
     assert.deepEqual(statusOf([row('2026-11-01', -1000_00, 'Utilities')]).Utilities, ['pending', 0]);
+    // Debit orders vary by a few rand: within 5% of the allocation is paid.
+    assert.deepEqual(statusOf([row('2026-11-01', -2590_00, 'Utilities')]).Utilities, ['settled', -10_00]);
+    assert.deepEqual(statusOf([row('2026-11-01', -2400_00, 'Utilities')]).Utilities, ['pending', 0]);
     assert.deepEqual(statusOf([]).Insurance, ['pending', 0]);
     assert.deepEqual(statusOf([]).Rent, ['unbudgeted', 0]);
   });
@@ -167,7 +177,7 @@ describe('trend and tips', () => {
   const previous = summarise(october, '2026-11-10', [row('2026-10-01', 30_000_00, 'Salary', 'income'), row('2026-10-05', -2000_00, 'Groceries')], false);
   const current = summarise(november, '2026-11-09', [row('2026-11-01', -1500_00, 'Groceries'), row('2026-11-02', -72_00, null)]);
 
-  test('on pace: dynamic extrapolates, pending static adds its allocation, irregular stays put', () => {
+  test('on pace: dynamic extrapolates, a pending static item reaches its allocation, irregular stays put', () => {
     const t = spendingTrend([previous, current]);
     const groceries = t.categories.find((c) => c.categoryId === 'Groceries')!;
     // 1500 over 11 of 31 days.
@@ -191,7 +201,8 @@ describe('trend and tips', () => {
       [...tips.map((t) => t.severity)].sort((a, b) => ['critical', 'warning', 'info'].indexOf(a) - ['critical', 'warning', 'info'].indexOf(b)),
     );
     const savings = tips.find((t) => t.code === 'savings_rate')!;
-    assert.equal(savings.data.saved, '28000.00');
+    assert.equal(savings.data.kept, '28000.00');
+    assert.equal(savings.data.saved, '0.00');
   });
 
   test('salary overdue is the first tip, and there is no daily allowance', () => {
@@ -203,6 +214,125 @@ describe('trend and tips', () => {
   test('no budgets set', () => {
     const bare = summariseCycle({ cycle: november, status: cycleStatus(november, '2026-11-01', true), today: '2026-11-01', rows: [], lines: [] });
     assert.deepEqual(deriveTips({ current: bare, previous: null }).map((t) => t.code), ['budgets_not_set']);
+  });
+});
+
+// An invented cycle with every kind of overspend at once. The unspent flexible budgets alone come to
+// R3,700, which is what discretionary left used to report.
+describe('left to spend', () => {
+  const budget: [string, BudgetLine['expenseType'], number, number, Partial<BudgetLine>?][] = [
+    ['Groceries', 'dynamic', 4000_00, 2500_00],
+    ['Fuel', 'dynamic', 1500_00, 0],
+    ['Rent', 'static', 6000_00, 6000_00],
+    ['Eating Out', 'dynamic', 1000_00, 1150_00], // over its budget
+    ['Fun', 'dynamic', 500_00, 0],
+    ['Vet', 'irregular', 0, 900_00], // no budget at all
+    ['Clothing', 'irregular', 300_00, 800_00], // over its budget
+    ['Streaming', 'static', 600_00, 250_00], // part-paid
+    ['Haircuts', 'dynamic', 200_00, 0],
+    ['Loan', 'static', 400_00, 0, { expectedDay: 25 }], // not paid yet
+    ['Gym', 'static', 500_00, 495_00], // a few rand short of its budget
+    ['Phone', 'static', 700_00, 1500_00], // cost far more than budgeted
+    ['Internet', 'static', 800_00, 800_00],
+    ['Insurance', 'static', 1200_00, 1200_00],
+    ['Savings', 'static', 5000_00, 5000_00, { isSavings: true }],
+    ['Repairs', 'irregular', 0, 1600_00], // no budget at all
+  ];
+  const tight = budget.map(([name, type, allocated, , over]) => line(name, type, allocated, over));
+  const spending = budget
+    .filter(([, , , spent]) => spent > 0)
+    .map(([name, , , spent, over]) => ({ ...row('2026-11-03', -spent, name), categoryIsSavings: over?.isSavings ?? false }));
+  const salary = row('2026-10-30', 25_000_00, 'Salary', 'income');
+  const summariseTight = (rows: LedgerRow[], cycle = november, today = '2026-11-13') =>
+    summariseCycle({ cycle, status: cycleStatus(cycle, today, true), today, rows, lines: tight });
+  const s = summariseTight([salary, ...spending]);
+
+  test('savings is saved, not spent', () => {
+    assert.equal(s.savedCents, 5000_00);
+    assert.equal(s.spentCents, 17_195_00);
+    assert.equal(s.netCents, 25_000_00 - 17_195_00);
+    assert.equal(s.categories.find((c) => c.categoryId === 'Savings')!.status, 'settled');
+    // Putting money away yesterday isn't yesterday's spending.
+    assert.equal(summariseTight([salary, ...spending], november, '2026-11-04').yesterday!.outCents, 17_195_00);
+  });
+
+  test('a few rand short is paid; a part payment leaves the rest still to come', () => {
+    assert.equal(s.categories.find((c) => c.categoryId === 'Gym')!.status, 'settled');
+    assert.deepEqual(
+      s.pendingDebitOrders.map((p) => [p.name, p.remainingCents]),
+      [['Loan', 400_00], ['Streaming', 350_00]],
+    );
+    assert.equal(s.pendingTotalCents, 750_00);
+  });
+
+  test('overspending anywhere comes off what is left: unbudgeted, over budget, a debit order that cost more', () => {
+    // 25,000 in - 17,195 spent - 5,000 saved - 750 still to pay.
+    assert.equal(s.leftCents, 2055_00);
+    // The unspent flexible budgets alone would say 3,700.
+    assert.equal(s.discretionaryLeftCents, 2055_00);
+    assert.equal(s.status.daysToSalary, 17);
+    assert.equal(s.dailyAllowanceCents, Math.floor(2055_00 / 17));
+  });
+
+  test('more out than in: discretionary left goes negative and the allowance stops at zero', () => {
+    const broke = summariseTight([salary, ...spending, row('2026-11-05', -2500_00, 'Repairs')]);
+    assert.equal(broke.discretionaryLeftCents, 2055_00 - 2500_00);
+    assert.equal(broke.dailyAllowanceCents, 0);
+  });
+
+  test('a cycle no salary opened measures against the budget instead of income', () => {
+    const before = cycleContaining('2026-09-10', starts, 31); // projected: before the first salary
+    assert.equal(before.salary, null);
+    const projected = summariseCycle({ cycle: before, status: cycleStatus(before, '2026-09-10', true), today: '2026-09-10', rows: [row('2026-09-05', -500_00, 'Groceries')], lines });
+    // Budget 8,500 - 500 spent - 3,500 debit orders to come; capped by the flexible budgets' 4,500.
+    assert.equal(projected.leftCents, 4500_00);
+    assert.equal(projected.discretionaryLeftCents, 4500_00);
+  });
+
+  test('a debit order far above its budget is flagged; a little above, or savings, is not', () => {
+    const well = (name: string) => isWellAboveBudget(s.categories.find((c) => c.categoryId === name)!);
+    assert.equal(well('Phone'), true);
+    assert.equal(well('Gym'), false);
+    assert.equal(well('Savings'), false);
+    const tips = deriveTips({ current: s, previous: null });
+    assert.equal(tips.find((t) => t.code === 'static_above_budget')!.severity, 'warning');
+    assert.ok(!tips.some((t) => t.code === 'overspent' && t.data.category === 'Savings'));
+  });
+});
+
+describe('cycles tracked part-way', () => {
+  const partial = { ...summarise(october, '2026-11-13', [row('2026-10-12', -2822_17, 'Groceries')], false), hasFullData: false };
+  const current = summarise(november, '2026-11-13', [row('2026-10-30', 30_713_54, 'Salary', 'income'), row('2026-11-01', -2500_00, 'Groceries')]);
+
+  test('a partial cycle is listed but left out of every average', () => {
+    const t = spendingTrend([partial, current]);
+    assert.deepEqual(t.cycles.map((c) => [c.id, c.partial]), [['2026-09-30', true], ['2026-10-30', false]]);
+    assert.equal(t.averageCompletedCents, null);
+    assert.equal(t.categories.find((c) => c.categoryId === 'Groceries')!.averageCents, null);
+  });
+
+  test('nothing is compared against a partial cycle', () => {
+    const codes = deriveTips({ current, previous: partial }).map((t) => t.code);
+    assert.ok(!codes.includes('spend_vs_last_cycle'));
+    assert.ok(!codes.includes('savings_rate'));
+    // Against a cycle tracked in full, the comparison is back.
+    assert.ok(deriveTips({ current, previous: { ...partial, hasFullData: true } }).map((t) => t.code).includes('spend_vs_last_cycle'));
+  });
+
+  test('savings stays out of the trend totals', () => {
+    const savingsLines = [...lines, line('Savings', 'static', 5000_00, { isSavings: true })];
+    const withSavings = summariseCycle({
+      cycle: november,
+      status: cycleStatus(november, '2026-11-13', true),
+      today: '2026-11-13',
+      rows: [row('2026-10-30', 30_713_54, 'Salary', 'income'), { ...row('2026-10-31', -5000_00, 'Savings'), categoryIsSavings: true }],
+      lines: savingsLines,
+    });
+    const t = spendingTrend([withSavings]);
+    assert.equal(t.cycles[0]!.savedCents, 5000_00);
+    assert.equal(t.cycles[0]!.spentCents, 0);
+    // Only the debit orders still to come: Utilities 2,600 + Insurance 900.
+    assert.equal(t.onPaceTotalCents, 3500_00);
   });
 });
 

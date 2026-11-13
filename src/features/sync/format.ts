@@ -30,12 +30,6 @@ export const KIND_LABEL: Record<TransactionKind, string> = {
   other: 'other',
 };
 
-export function formatRand(cents: number) {
-  const abs = Math.abs(cents);
-  const rands = Math.floor(abs / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return `${cents < 0 ? '-' : ''}R${rands}.${String(abs % 100).padStart(2, '0')}`;
-}
-
 export function escapeMarkdown(s: string) {
   return s.replace(/([*_~`|\\>])/g, '\\$1');
 }

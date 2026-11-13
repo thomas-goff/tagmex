@@ -413,7 +413,7 @@
 
 .budgetRow {
   display: grid;
-  grid-template-columns: 64px minmax(140px, 1.4fr) 110px 120px 90px 70px auto;
+  grid-template-columns: 64px minmax(140px, 1.4fr) 110px 120px 90px 84px 70px auto;
   gap: 8px;
   align-items: center;
   padding: 10px 12px;
@@ -447,9 +447,40 @@
   letter-spacing: 0.03em;
 }
 
+.accountRow {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) minmax(140px, 1fr) minmax(140px, 1.4fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.accountRow:last-child {
+  border-bottom: none;
+}
+
+.accountRow input {
+  font: inherit;
+  font-size: 14px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
 @media (max-width: 760px) {
   .budgetRow {
     grid-template-columns: 56px 1fr 1fr;
+  }
+
+  .accountRow {
+    grid-template-columns: 1fr;
   }
 
   .budgetHead {

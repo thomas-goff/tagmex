@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util';
 import { z } from 'zod';
 import { absaParser } from '@/features/bank-email/absa/parser';
 import { GmailError, createGmailClient } from '@/features/gmail/client';
-import { formatRand } from '@/features/sync/format';
+import { formatRand } from '@/features/transactions/money';
 import { backfillTransactions, type BackfillItem } from '@/features/transactions/backfill';
 import { createLedger } from '@/features/transactions/ledger';
 import { OWNER_USER_ID } from '@/features/users/owner';

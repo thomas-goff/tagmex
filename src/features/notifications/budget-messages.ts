@@ -1,8 +1,9 @@
 import { paydayOf } from '@/features/budget/standing';
-import { isOverspent, type CycleSummary } from '@/features/budget/summary';
+import { isOverspent, isWellAboveBudget, type CycleSummary } from '@/features/budget/summary';
 import { daysBetween, shortDate } from '@/features/cycle/dates';
-import { escapeMarkdown, formatRand } from '@/features/sync/format';
-import { debitOrdersEmbed, digestEmbed, salaryLandedEmbed, salaryOverdueEmbed, thresholdEmbed, type DiscordPayload } from './embeds';
+import { escapeMarkdown } from '@/features/sync/format';
+import { formatRand } from '@/features/transactions/money';
+import { aboveBudgetEmbed, debitOrdersEmbed, digestEmbed, salaryLandedEmbed, salaryOverdueEmbed, thresholdEmbed, type DiscordPayload } from './embeds';
 import { splitToFit } from './layout';
 
 // What the budget posts to Discord, as pure functions of the summary. Discord stays one-way: Claude
@@ -37,7 +38,8 @@ export function digestPayloads(
     pending: s.pendingDebitOrders.map((p) => ({
       name: p.name,
       emoji: s.categories.find((c) => c.categoryId === p.categoryId)?.emoji ?? null,
-      allocatedCents: p.allocatedCents,
+      remainingCents: p.remainingCents,
+      paidCents: p.paidCents,
       dueLabel: p.expectedOn ? shortDate(p.expectedOn) : null,
       late: p.late,
     })),
@@ -46,7 +48,7 @@ export function digestPayloads(
   return [...splitToFit({ ...(content ? { content } : {}), embeds: [budgets] }), ...splitToFit({ embeds: [debitOrders] })];
 }
 
-export type AlertKind = 'category_threshold' | 'salary_landed' | 'salary_overdue';
+export type AlertKind = 'category_threshold' | 'static_above_budget' | 'salary_landed' | 'salary_overdue';
 
 export interface BudgetAlert {
   kind: AlertKind;
@@ -81,7 +83,8 @@ export function budgetAlerts(current: CycleSummary, previous: CycleSummary | nul
             landedLabel: shortDate(salary.occurredOn),
             nextLabel: shortDate(cycle.end),
             nextProjected: cycle.endIsProjected,
-            recap: previous ? recap(previous) : null,
+            // A cycle tracked only part-way has no honest recap.
+            recap: previous?.hasFullData ? recap(previous) : null,
           }),
         ],
       },
@@ -99,8 +102,17 @@ export function budgetAlerts(current: CycleSummary, previous: CycleSummary | nul
   }
 
   for (const c of current.categories) {
-    // A static item reaching 100% is a debit order being paid: settled, not an alert.
-    if (c.allocatedCents === 0 || c.usedPct === null || c.expenseType === 'static') continue;
+    // A static item reaching 100% is a debit order being paid: settled, not an alert, unless it
+    // cost far more than budgeted. Savings going over is no problem at all.
+    if (isWellAboveBudget(c)) {
+      alerts.push({
+        kind: 'static_above_budget',
+        dedupeKey: `static_above:${cycle.id}:${c.categoryId}`,
+        payload: { embeds: [aboveBudgetEmbed(c)] },
+        alsoClaim: [],
+      });
+    }
+    if (c.allocatedCents === 0 || c.usedPct === null || c.expenseType === 'static' || c.isSavings) continue;
     const reached = THRESHOLDS.filter((t) => c.spentCents * 100 >= c.allocatedCents * t);
     const top = reached.at(-1);
     if (top === undefined) continue;
@@ -124,6 +136,7 @@ export function recap(s: CycleSummary) {
   const clauses = [
     `${s.cycle.label}: spent ${formatRand(s.spentCents)} against ${formatRand(s.allocatedCents)} budgeted`,
     s.incomeCents > 0 ? `income ${formatRand(s.incomeCents)}, net ${formatRand(s.netCents)}` : null,
+    s.savedCents > 0 ? `${formatRand(s.savedCents)} into savings` : null,
     over.length > 0 ? `biggest overspends: ${over.join(', ')}` : null,
     s.uncategorised.count > 0 ? `${s.uncategorised.count} still uncategorised` : null,
   ];

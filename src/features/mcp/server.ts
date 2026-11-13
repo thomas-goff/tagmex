@@ -1,5 +1,6 @@
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { authenticate, principalOf, type AuthDeps } from './auth';
+import { registerPrompts } from './prompts';
 import { registerTools, type ToolDeps } from './tool';
 import { CYCLE_NOTE, MONEY_NOTE, READ_TOOLS, UNTRUSTED_NOTE } from './tools/read';
 import { WRITE_TOOLS } from './tools/write';
@@ -12,8 +13,9 @@ const INSTRUCTIONS = [
   CYCLE_NOTE,
   MONEY_NOTE,
   UNTRUSTED_NOTE,
-  'Accounts show as the bank\'s type and last 4 digits; list_accounts has the names the user gave them and the counterparties they named.',
-  'Only change data (categorise, budgets, settings, exclusions) when the user asks or agrees.',
+  'Accounts show as the bank\'s type and last 4 digits; list_accounts has the names the user gave them, each account\'s latest balance and the counterparties they named.',
+  'Money moved into a savings category counts as saved, not spent.',
+  'Only change data (categorise, budgets, categories, rules, settings, exclusions, added or split transactions) when the user asks or agrees; tools that would change many rows return a preview first and need confirm: true.',
 ].join(' ');
 
 export interface EndpointDeps {
@@ -43,8 +45,9 @@ export function createMcpEndpoint({ tools, auth }: EndpointDeps) {
     ({ authInfo }) => {
       const principal = principalOf(authInfo);
       if (!principal) throw new Error('MCP request reached the handler without a verified principal');
-      const server = new McpServer({ name: 'tagmex', version: '0.3.0' }, { instructions: INSTRUCTIONS });
+      const server = new McpServer({ name: 'tagmex', version: '0.4.0' }, { instructions: INSTRUCTIONS });
       registerTools(server, TOOLS, { principal, deps: tools });
+      registerPrompts(server);
       return server;
     },
     { onerror: (err) => console.error('MCP handler error', err) },

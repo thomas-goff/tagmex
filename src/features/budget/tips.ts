@@ -1,6 +1,5 @@
-import { formatRand } from '@/features/sync/format';
-import { centsToDecimal } from '@/features/transactions/money';
-import { isOverspent, type CycleSummary } from './summary';
+import { centsToDecimal, formatRand } from '@/features/transactions/money';
+import { isOverspent, isWellAboveBudget, type CycleSummary } from './summary';
 import { onPaceCents } from './trend';
 
 // Observations about the current cycle, most urgent first. Each has a stable `code` so Discord and
@@ -34,9 +33,12 @@ const MIN_DAYS_FOR_PACE = 5;
 // Below this, a change from last cycle isn't worth mentioning.
 const NOTABLE_CHANGE_PCT = 15;
 
-export function deriveTips({ current, previous }: { current: CycleSummary; previous: CycleSummary | null }): Tip[] {
+export function deriveTips({ current, previous: last }: { current: CycleSummary; previous: CycleSummary | null }): Tip[] {
   const tips: Tip[] = [];
   const { status } = current;
+  // A cycle tracked only part-way isn't worth comparing against, and can't be projected from.
+  const previous = last?.hasFullData ? last : null;
+  const paceable = status.isCurrent && current.hasFullData && status.daysElapsed >= MIN_DAYS_FOR_PACE;
   const rand = centsToDecimal;
 
   if (status.salaryOverdue) {
@@ -76,19 +78,20 @@ export function deriveTips({ current, previous }: { current: CycleSummary; previ
     });
   }
 
-  // A settled debit order that cost more than budgeted isn't overspending, but the budget is stale.
-  for (const c of current.categories.filter((c) => c.status === 'settled' && c.differenceCents > 0)) {
+  // A settled debit order that cost more than budgeted isn't overspending, but the budget is stale;
+  // one that cost far more is worth a warning.
+  for (const c of current.categories.filter((c) => c.status === 'settled' && !c.isSavings && c.differenceCents > 0)) {
     tips.push({
       code: 'static_above_budget',
-      severity: 'info',
+      severity: isWellAboveBudget(c) ? 'warning' : 'info',
       message: `${c.name} is settled at ${formatRand(c.spentCents)}, ${formatRand(c.differenceCents)} more than its ${formatRand(c.allocatedCents)} budget. Update the budget if that's the new amount.`,
       data: { category_id: c.categoryId, category: c.name, paid: rand(c.spentCents), allocated: rand(c.allocatedCents), difference: rand(c.differenceCents) },
     });
   }
 
-  if (status.isCurrent && status.daysElapsed >= MIN_DAYS_FOR_PACE) {
+  if (paceable) {
     for (const c of current.categories) {
-      if (c.expenseType !== 'dynamic' || c.allocatedCents === 0 || c.remainingCents < 0) continue;
+      if (c.expenseType !== 'dynamic' || c.isSavings || c.allocatedCents === 0 || c.remainingCents < 0) continue;
       const projected = onPaceCents(current, c.categoryId);
       if (projected <= c.allocatedCents) continue;
       tips.push({
@@ -106,7 +109,7 @@ export function deriveTips({ current, previous }: { current: CycleSummary; previ
       code: 'late_debit_orders',
       severity: 'warning',
       message: `Expected but not seen yet: ${late.map((p) => `${p.name} (due ${p.expectedOn})`).join(', ')}.`,
-      data: { debit_orders: late.map((p) => ({ category: p.name, expected_on: p.expectedOn, amount: rand(p.allocatedCents) })) },
+      data: { debit_orders: late.map((p) => ({ category: p.name, expected_on: p.expectedOn, amount: rand(p.remainingCents) })) },
     });
   }
 
@@ -122,21 +125,23 @@ export function deriveTips({ current, previous }: { current: CycleSummary; previ
   }
 
   if (previous && previous.incomeCents > 0) {
-    const savedCents = previous.incomeCents - previous.spentCents;
-    const pct = Math.round((savedCents * 100) / previous.incomeCents);
+    // Kept = everything that wasn't spent: what went into savings, and what was simply left over.
+    const keptCents = previous.incomeCents - previous.spentCents;
+    const pct = Math.round((keptCents * 100) / previous.incomeCents);
+    const intoSavings = previous.savedCents > 0 ? `, ${formatRand(previous.savedCents)} of it into savings` : '';
     tips.push({
       code: 'savings_rate',
-      severity: savedCents < 0 ? 'warning' : 'info',
+      severity: keptCents < 0 ? 'warning' : 'info',
       message:
-        savedCents < 0
-          ? `Last cycle (${previous.cycle.label}) spent ${formatRand(-savedCents)} more than came in.`
-          : `Last cycle (${previous.cycle.label}) kept ${pct}% of income (${formatRand(savedCents)}).`,
-      data: { cycle_id: previous.cycle.id, saved: rand(savedCents), savings_rate_pct: pct },
+        keptCents < 0
+          ? `Last cycle (${previous.cycle.label}) spent ${formatRand(-keptCents)} more than came in.`
+          : `Last cycle (${previous.cycle.label}) kept ${pct}% of income (${formatRand(keptCents)}${intoSavings}).`,
+      data: { cycle_id: previous.cycle.id, kept: rand(keptCents), saved: rand(previous.savedCents), savings_rate_pct: pct },
     });
   }
 
-  if (previous && status.isCurrent && status.daysElapsed >= MIN_DAYS_FOR_PACE && previous.spentCents > 0) {
-    const onPace = current.categories.reduce((sum, c) => sum + onPaceCents(current, c.categoryId), 0);
+  if (previous && paceable && previous.spentCents > 0) {
+    const onPace = current.categories.filter((c) => !c.isSavings).reduce((sum, c) => sum + onPaceCents(current, c.categoryId), 0);
     const changePct = Math.round(((onPace - previous.spentCents) * 100) / previous.spentCents);
     if (Math.abs(changePct) >= NOTABLE_CHANGE_PCT) {
       tips.push({
