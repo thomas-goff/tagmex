@@ -1,393 +1,151 @@
 # tagmex
 
-Next.js 16 (App Router) + Drizzle ORM + Postgres + Zod.
+A personal budget that keeps itself. tagmex reads the notification emails your bank already sends
+you, turns each one into a categorised transaction, and keeps a running budget that runs from one
+payday to the next. You talk to it through **Claude**, it reports to **Discord** as Pennyworth (a
+butler who keeps the books), and the same numbers are on a small **web dashboard**.
+
+It is built for one person's Absa accounts, in South African rand, but the bank parsing is
+pluggable.
+
+## What it does
+
+- **No bank login, no screen scraping.** Every Absa card swipe, debit order and transfer sends a
+  "notifyme" email. tagmex reads those from Gmail (read-only) every 30 minutes.
+- **Categorises for you, and learns.** Known merchants are filed automatically. Anything it
+  doesn't recognise lands in a review queue; once you file a description, it remembers.
+- **Budgets by pay cycle, not calendar month.** A cycle starts the day your salary lands and ends
+  the day before the next one, so "how much can I still spend?" has a real answer.
+- **Answers questions in plain language.** Ask Claude "where do I stand?", "what debit orders
+  haven't gone off?" or "help me sort what's uncategorised", on desktop or your phone.
+- **Tells you without being asked.** A daily digest, alerts at 80% and 100% of a budget, a
+  heads-up when a debit order costs more than expected, and a note when your salary lands (or is
+  late).
+
+## How it works
+
+```mermaid
+flowchart LR
+  bank[Absa notification emails] --> gmail[Gmail]
+  cron[Supabase Cron<br/>every 30 min] --> sync[/api/sync/]
+  gmail --> sync
+  sync --> verify[Sender check<br/>DMARC + exact From]
+  verify --> parse[Absa parser]
+  parse --> ledger[(Ledger<br/>Postgres)]
+  ledger --> cat[Categorise]
+  cat --> ledger
+  ledger --> budget[Budget maths]
+  budget --> claude[Claude<br/>MCP server]
+  budget --> discord[Discord<br/>Pennyworth]
+  budget --> dash[Dashboard]
+```
+
+1. **Sync.** Supabase Cron calls `/api/sync`. It fetches new emails from the bank's sender,
+   keeps only those that passed DMARC for the bank's domain, and parses each into amount, account,
+   merchant description and available balance. Every email is recorded once, keyed on its Gmail
+   message id, so a retry never duplicates anything. Emails that fail to parse are kept and can be
+   re-processed after a parser fix.
+2. **Categorise.** Each transaction is tried against, in order: your learned rules (exact
+   description and direction), built-in merchant rules (whole words, so `BP` never matches `BPA`),
+   and transfer detection (an opposite amount on another of your accounts within 3 days). If none
+   match it stays **uncategorised** and is posted to #needs-review.
+3. **Learn.** When you file an uncategorised transaction (via Claude, a Discord dropdown or the
+   dashboard), tagmex learns a rule for that description and applies it to the other uncategorised
+   ones like it. Things already filed are never silently moved.
+4. **Budget.** Numbers are computed on read from the ledger, never stored, so they are always
+   consistent with the transactions.
+5. **Report.** Claude reads it through the MCP server at `/api/mcp`; Discord gets posts as things
+   happen and an hourly job sends the digest and alerts; the dashboard shows the same figures.
+
+Every change, whether it comes from Claude, the dashboard or a Discord button, goes through one
+shared set of commands with the same rules, so the three can never disagree.
+
+## The budget
+
+- **Cycles** run salary to salary. A cycle is named by the date the salary landed (e.g.
+  `2026-10-30`) and labelled by the month it ends in ("November 2026"). The next payday is projected
+  from your usual pay day, moved back for weekends and SA public holidays.
+- **Budget items**: one per expense category, each `static` (debit orders, with an expected day),
+  `dynamic` (groceries, fuel) or `irregular`.
+- **Status**: a debit order that has gone off is **settled**; one still to come is **pending**.
+  Spending categories are **on track**, **warning** from 80% and **over** from 100%.
+- **Savings**: money moved into a savings category counts as **saved**, not spent.
+- **Left** is income minus spent, saved and debit orders still to come: money not yet spoken for.
+  **Discretionary left** takes overspending anywhere off that, and the **daily allowance** spreads
+  it over the days to payday.
+- **By hand**: cash spends can be added, and one transaction can be split across categories.
+- Transfers between your own accounts count as neither income nor spending. Uncategorised
+  transactions are left out of the numbers and reported alongside, so you know.
+
+## Talking to it
+
+**Claude** connects to `/api/mcp` as a custom connector (claude.ai → Settings → Connectors) and
+signs in with Clerk. It gets read tools (`get_budget_overview` is the starting point, plus
+transactions, categories, accounts, debit orders, trends and tips) and write tools (categorise,
+re-categorise, budgets, categories, rules, exclusions, cash entries, splits, posting a status to
+Discord). Writes that would touch many rows show a preview first and need your go-ahead. There are
+also three ready-made prompts: `weekly_review`, `sort_inbox` and `plan_next_cycle`.
+
+**Discord** has four channels:
+
+| Channel | What Pennyworth posts there |
+|---|---|
+| #transactions | Each categorised transaction with its category's budget bar and days to payday |
+| #needs-review | Each uncategorised transaction, with a category dropdown, Exclude, and Accept for Claude's suggestion |
+| #budget | The daily digest, 80% / 100% alerts, debit orders that cost far more, salary landed or overdue |
+| #system | Parse failures, sync or Gmail token failures, a sync that has gone quiet, heartbeat |
+
+**The dashboard** at `/dashboard` (Clerk sign-in) has an overview, transactions, budget and
+settings pages.
+
+## Safety and privacy
+
+- Gmail access is read-only, and only the bank's sender is read.
+- Two allowlists: Clerk's sign-up restriction and the app's own `app_users` table. Every query is
+  scoped to the signed-in user.
+- Nothing is hard-deleted. Excluding a transaction is a soft delete, and splits can be undone.
+- Transaction descriptions are treated as untrusted text: Claude is told to show them, never to
+  follow them.
+- Every MCP call is audited (kept 90 days) and limited to 60 a minute.
+
+## Stack
+
+Next.js 16 (App Router) on Vercel · Postgres on Supabase (with Supabase Cron) · Drizzle ORM · Zod
+· Clerk (dashboard sign-in and MCP OAuth) · the MCP TypeScript SDK · Gmail API · Discord webhooks
+and interactions.
+
+## Running it
 
 ```bash
 npm install
+cp .env.example .env.local   # then fill it in
 npm run dev
-npm test        # unit tests (node:test via tsx)
+```
+
+```bash
+npm test             # unit tests (node:test via tsx)
 npm run lint
 npm run typecheck
 ```
 
-CI (`.github/workflows/ci.yml`) runs lint, typecheck and the tests on every pull request and on
-`main`. It needs no secrets: only Vercel's production build touches the database.
+CI runs lint, typecheck and tests on every pull request. Merging to `main` deploys to production,
+and the production build applies any new database migrations itself.
 
-## Env vars
+Setting it up from scratch (Gmail, Clerk, Discord, connecting Claude) and day-to-day operations
+live in [`.claude/skills/`](.claude/skills), written so that Claude Code can do them with you:
 
-| Var | |
+| Guide | For |
 |---|---|
-| `DATABASE_URL` | Supabase transaction pooler |
-| `MIGRATION_DATABASE_URL` | Supabase session pooler (migrations only: `npm run db:migrate`, and production builds). In Vercel, **Production scope only** |
-| `CRON_SECRET` | 32+ chars, also in Supabase Vault as `cron_secret` |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google Cloud "Desktop app" OAuth client |
-| `GMAIL_REFRESH_TOKEN` | from `npm run gmail:auth` |
-| `GMAIL_SENDER` | optional, default `notifyme@absa.co.za`; used as `from:` and matched against From |
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` | Clerk → API keys. The dashboard sign-in and `/api/mcp`. The browser needs the `NEXT_PUBLIC_` name; `/api/mcp` also accepts `CLERK_PUBLISHABLE_KEY` |
-| `DISCORD_WEBHOOK_URL` | **#transactions**, and the fallback for the three below |
-| `DISCORD_REVIEW_WEBHOOK_URL` | optional, **#needs-review** |
-| `DISCORD_BUDGET_WEBHOOK_URL` | optional, **#budget** |
-| `DISCORD_SYSTEM_WEBHOOK_URL` | optional, **#system** |
-| `DISCORD_PING_USER_ID` | optional, your Discord user id: @-mentioned on critical #system messages only |
-| `DISCORD_AVATAR_URL` | optional, a public image URL: Pennyworth's avatar on every post (unset = each webhook's own) |
-| `DISCORD_PUBLIC_KEY` | optional, the Discord application's public key: turns on the [#needs-review buttons](#needs-review-buttons) |
+| [setup](.claude/skills/setup/SKILL.md) | First-time setup, environment variables, connecting Claude |
+| [ops](.claude/skills/ops/SKILL.md) | Checking production, dry runs, re-processing, backfills, SQL checks |
+| [migrations](.claude/skills/migrations/SKILL.md) | Changing the database schema safely |
+| [mcp-tool](.claude/skills/mcp-tool/SKILL.md) | Adding or changing a Claude tool |
 
-## Deploys and migrations
-
-Merging to `main` deploys to production, and the production build applies any new `drizzle/`
-migrations itself. `npm run build` (pinned as Vercel's build command in `vercel.json`) is
-`next build`, then `npm run db:migrate:deploy` (`scripts/migrate-on-deploy.ts`):
-
-| Build | What it does with the database |
-|---|---|
-| **Production** (`VERCEL_ENV=production`) | After `next build` succeeds, applies pending migrations to `MIGRATION_DATABASE_URL`, then checks every migration in `drizzle/meta/_journal.json` is recorded. Any failure fails the build, so the deploy never goes live and the previous one keeps serving. If `MIGRATION_DATABASE_URL` isn't set, that's a failure too. |
-| **Preview** (any branch or PR) | Nothing. It never connects, even if a URL is set (it warns if `MIGRATION_DATABASE_URL` is set for Preview). |
-| **Local** `npm run build` | Nothing (`VERCEL_ENV` is unset). |
-
-In Vercel → Settings → Environment Variables, set `MIGRATION_DATABASE_URL` for **Production**
-only. The build log shows `Migrations: applied …`, `Migrations: up to date` or `Migrations: skipped`.
-
-Things to know:
-
-- **Migrations must work with the code already running.** The old deployment serves traffic while
-  the new one builds, and Instant Rollback doesn't rebuild or undo migrations. So add tables and
-  nullable columns first; drop or rename in a later PR once nothing reads the old shape.
-- **A failed deploy can still have migrated.** Migrations run last, after `next build`, so a
-  compile error never touches the database. If Vercel fails after that (rare), the migration stays
-  applied. That's fine if it's additive (above): redeploy, and the build finds nothing to do.
-- **Out-of-order migrations fail the deploy.** drizzle only applies migrations newer than the
-  latest applied one. If a branch's migration was generated before another landed on `main`,
-  drizzle would skip it silently, so the build fails and names it. Delete it and run
-  `npm run db:generate` again on top of `main`.
-- **Concurrent production builds** queue on a Postgres advisory lock, and DDL that waits more than
-  10s for a lock fails the build rather than stalling production queries.
-- `npm run db:migrate` still works by hand, e.g. to migrate before merging. The build then finds
-  nothing to do.
-
-## Gmail sync (phase 1)
-
-1. Google Cloud: enable the Gmail API, create a **Desktop app** OAuth client, and publish the
-   consent screen to **In production** (in Testing the refresh token dies after 7 days).
-2. `npm run gmail:auth`, approve `gmail.readonly`, put the printed token in `.env.local` and Vercel.
-3. Dry run (writes nothing):
-   `curl -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/sync?dryRun=true&limit=10"`
-4. `npm run db:migrate` creates the sync tables and schedules `gmail-sync` every 30 minutes.
-5. After a parser fix: `curl -X POST -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/sync?retryFailed=true"`
-
-## Transactions + categories (phase 2)
-
-Every parsed email becomes one row in `transactions` (keyed on the Gmail message id, so retries
-never duplicate), categorised in this order: your learned rules (exact description) → merchant
-rules (whole words, so `BP` never matches `BPA`) → transfer detection (opposite amount on another
-account within 3 days) → uncategorised (`category_id` null). Discord shows the category, or
-❔ **Uncategorised**.
-
-### Code map
+## Repository layout
 
 | Where | What |
 |---|---|
-| `src/features/categorisation/` | Pure domain: rule matching, the categorisation steps, seed data (`defaults.ts`). No DB. |
-| `src/features/transactions/ports.ts` | Storage interfaces the services depend on |
-| `src/features/transactions/drizzle-stores.ts` | Their Drizzle implementation |
-| `src/features/transactions/record-transaction.ts` | Parsed email → categorised ledger row (sync + backfill) |
-| `src/features/transactions/correct-category.ts` | Correct a category, learn a rule, apply it to past uncategorised rows; re-categorise rows that are already filed |
-| `src/features/transactions/manual-entries.ts` | Transactions added by hand (cash) and the parts of a split |
-| `src/features/bank-email/registry.ts` | Which parser reads which bank's emails, by sender. A second bank is one more entry in `src/features/sync/index.ts` |
-| `src/features/sync/mailbox-sync.ts` | One sync run, with everything it touches injected (mailbox, parsers, bookkeeping, ledger, announcements); `drizzle-ingest-store.ts`, `announce.ts` and `index.ts` wire the real ones |
-| `src/features/transactions/ledger.ts` | Wires services to a database (app: `index.ts`; scripts: their own connection) |
-
-To add a merchant rule for everyone, add it to `DEFAULT_MERCHANT_RULES` (with a test in
-`defaults.test.ts`) and re-run `npm run db:seed`. The seed adds missing rules, then runs all rules
-over transactions that are still uncategorised. Categorised rows are never changed.
-
-### Rollout (do these in order, once)
-
-All commands are for **Git Bash**. In PowerShell `curl` is a different program, so use Git Bash.
-First set these in the shell:
-
-```bash
-export APP_URL=https://<your-vercel-app>.vercel.app
-export CRON_SECRET=<the CRON_SECRET from Vercel>
-```
-
-1. **Migrate** (adds tables and one nullable column, so the running phase 1 code is unaffected).
-   Uses `MIGRATION_DATABASE_URL` from `.env.local`:
-
-   ```bash
-   npm run db:migrate
-   ```
-
-2. **Seed** categories and merchant rules. Uses `DATABASE_URL` from `.env.local`. Check the
-   `Database:` host it prints is your Supabase project. On a new database, expect `Added 14 categories and
-   44 merchant rules`. A second run adds 0.
-
-   ```bash
-   npm run db:seed
-   ```
-
-3. **Deploy**: merge the PR so Vercel deploys. No new env vars.
-
-4. **Check categories on recent mail** (writes nothing; posts `[dry run]` lines to Discord):
-
-   ```bash
-   curl -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/sync?dryRun=true&limit=10"
-   ```
-
-5. **Backfill** phase 1 history. It runs locally, so `.env.local` needs `DATABASE_URL`,
-   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN`. It never posts to Discord.
-   Start with a dry run and compare a month of lines against the Absa app:
-
-   ```bash
-   npm run transactions:backfill -- --dry-run
-   ```
-
-   ```bash
-   npm run transactions:backfill
-   ```
-
-   Lines marked `skipped` were parsed in phase 1 but don't parse now. That means the parser has
-   regressed, so look into it rather than ignoring it. Re-running is safe.
-
-6. **Teach it the rest** (below), then leave it for a couple of days and run the checks.
-
-### Correcting categories
-
-Ask Claude ("help me categorise what's uncategorised"), use the dropdown on a #needs-review
-message, or the Transactions page of the dashboard. All three run the same command: it sets the
-category, learns a rule for that exact description and applies it to the other uncategorised
-transactions with it. Rows you or a rule already categorised are never changed that way; to move
-those, ask Claude to re-categorise them (`recategorise_transactions`). Correcting the same
-description again re-points its rule.
-
-### Checks (Supabase SQL editor)
-
-```sql
--- Parsed emails still without a transaction. Expect 0 after the backfill (a message mid-sync can show briefly).
-select count(*) from ingested_messages where status = 'parsed' and transaction_id is null;
-
--- How things were categorised.
-select coalesce(c.name, 'UNCATEGORISED') as category, t.category_source, count(*)
-from transactions t left join categories c on c.id = t.category_id
-where not t.is_deleted group by 1, 2 order by 3 desc;
-
--- Duplicates. The unique (source, source_ref) constraint should make this always empty.
-select source_ref, count(*) from transactions group by 1 having count(*) > 1;
-```
-
-## Budget + Claude (phase 3)
-
-Claude is the interface: it connects to the MCP server at `/api/mcp` and answers "where do I
-stand?" from the ledger. Discord gets a daily digest and alerts without you asking, from
-Pennyworth, a butler who keeps Master Goff's books. The same numbers are on the dashboard at
-`/dashboard`, behind Clerk sign-in.
-
-### How the budget works
-
-- **Cycles run salary to salary**, not by calendar month. A cycle starts on the day the salary
-  credit lands (a credit in the `Salary` category, within ±`salary_tolerance_pct` of the expected
-  amount when one is set) and its id is that date, e.g. `2026-10-30`. It's labelled by the month it
-  ends in ("November 2026"). The next salary is projected from `salary_day_hint` (default 31 =
-  month end), clamped to short months and moved back to the previous business day for weekends and
-  SA public holidays (computed, so the list never goes stale). A late salary keeps the cycle open
-  and raises "salary overdue". A second salary-like credit within 20 days is income, not a cycle.
-- **Budget items**: one per expense category (created at R0 automatically), `static` (debit
-  orders, with an expected day), `dynamic` or `irregular`, with an allocation per cycle.
-- **Status** per category: a static item paid in full (within 5% of its allocation, so R995 of
-  R1,000 is paid) is **settled**, never over budget, even if the debit order cost more (that
-  difference is noted, and a tip suggests updating the budget; one that cost 20% more or above
-  also raises a warning and a #budget alert); part-paid or unpaid static items are **pending**,
-  and what is still to come on them is the rest of the allocation. Dynamic and irregular items are
-  **on track**, **warning** from 80% and **over** from 100%. Only dynamic and irregular items
-  raise 80% / 100% alerts.
-- **Savings**: an expense category flagged as savings (`categories.is_savings`; a category called
-  Savings is flagged by migration 0012, any other with `update_category` or the Budget page).
-  Money moved into it is **saved**, not spent: it is left out of `spent`, reported as `saved`,
-  and its item is settled or pending like a debit order.
-- **Emoji**: every category has one (`categories.emoji`, defaults from migration 0009; 🏷️ when
-  unset), shown on Discord and the dashboard. Change it on the dashboard or with
-  `set_category_emoji`.
-- **Numbers** are computed on read, never stored (definitions at the top of
-  `src/features/budget/summary.ts`): spent per category (refunds net off), remaining, saved,
-  pending debit orders, income and net (income - spent). **Left** = income - spent - saved -
-  debit orders still to come: the money not yet spoken for. **Discretionary left** is the smaller
-  of that and the unspent dynamic and irregular budgets, so overspending anywhere (over a budget,
-  in a category with no budget, a debit order that cost more) comes off it, and it can go
-  negative. The **daily allowance** is discretionary left over the days to payday, never below
-  R0. Transfers count as neither. Uncategorised transactions are left out of every number and
-  reported alongside so you know.
-- **History**: nothing is compared against a cycle from before tracking began. A cycle that
-  started before the ledger's first transaction is marked partial and left out of averages, the
-  "vs last cycle" and savings-rate tips, and the salary-landed recap; the trend never goes back
-  further than the ledger does.
-- **Balances**: each bank email's "Available" figure is kept (`transactions.balance_after`), and
-  the latest per account shows in `list_accounts` and on the Settings page. For a credit card it
-  is the credit still available. It is only as fresh as that account's last email.
-- **By hand**: a transaction the bank never emailed (cash) can be added (`add_transaction`,
-  account `CASH …0000` unless one is named), and one transaction can be split between categories
-  (`split_transaction`): the original is excluded and its parts stand in for it; restoring the
-  original undoes the split.
-
-### Code map
-
-| Where | What |
-|---|---|
-| `src/features/cycle/` | Pure: dates in SAST, SA holidays, salary detection, cycle boundaries |
-| `src/features/budget/` | Pure maths (`summary`, `trend`, `tips`), `service.ts` (the one service layer), and the repo in three parts (cents at the boundary): `settings-repo`, `category-repo` (categories, budget items, rules), `transaction-repo` (the budget's view of the ledger), composed in `repo.ts` |
-| `src/features/commands/` | Every write (categorise and re-categorise, categories, rules, budgets, salary, notifications, exclude, add, split, account labels, posting a status), shared by the MCP tools, the dashboard and the Discord buttons. `test-support.ts` is an in-memory tagmex the tests run the real commands over |
-| `src/features/mcp/` | Clerk token check (`auth.ts`, `clerk.ts`), tool wrapper (`tool.ts`: rate limit, audit, output schema check, errors), tools in `tools/read.ts` and `tools/write.ts` (thin adapters over the service and the commands), output shapes in `format.ts`, prompts in `prompts.ts` |
-| `src/features/notifications/` | Discord channels, Pennyworth's messages (`embeds.ts`) and their card layout (`layout.ts`), digest and alert messages, claim-before-post dedupe, #needs-review edits, #system alerts |
-| `src/app/api/mcp/` | The MCP endpoint (stateless streamable HTTP) |
-| `src/app/.well-known/` | OAuth protected resource metadata (points clients at Clerk) |
-| `src/app/api/digest/` | Hourly job: alerts, the daily digest, stale-sync check |
-| `src/app/dashboard/` | The signed-in dashboard: overview, transactions, budget, settings. Server Actions in `actions.ts` |
-| `src/proxy.ts`, `src/features/auth/session.ts` | Clerk session: the proxy redirects signed-out visits; `requireUser()` is the real check on every page and action |
-
-### Discord channels
-
-| Channel | What | Webhook |
-|---|---|---|
-| #transactions | Each categorised transaction: amount, merchant, category, its budget bar (or ✅ Settled) and days to payday | `DISCORD_WEBHOOK_URL` |
-| #needs-review | Each uncategorised transaction, with a category dropdown and Exclude (once [buttons](#needs-review-buttons) are set up). Shows Claude's suggestion with an Accept button; ticked ✅ with its category once it's sorted, however it's sorted | `DISCORD_REVIEW_WEBHOOK_URL` |
-| #budget | Daily digest from 07:00 SAST, 80% / 100% category alerts, a debit order that cost far more than budgeted, salary landed + last cycle recap, salary overdue | `DISCORD_BUDGET_WEBHOOK_URL` |
-| #system | Parse failures, sync / Gmail token failures (once a day per error, with a ping), no successful sync for 2h (ping), heartbeat, dry runs | `DISCORD_SYSTEM_WEBHOOK_URL` |
-
-Every message is a card posted as **Pennyworth** (the webhook username), using Discord's
-Components V2 layout: a coloured edge for its status, a heading, the lists under a divider, and
-small grey details at the bottom. Messages are still written as embeds in `embeds.ts`;
-`layout.ts` turns each one into a card when it's sent. A card too big for Discord's limits (4000
-characters, 40 components per message) continues in another message titled "(continued)",
-so the digest's lists are never cut short. #needs-review messages posted before the
-switch are still edited as embeds. Channels without a webhook fall back to #transactions. Set `DISCORD_REVIEW_WEBHOOK_URL` before
-going live: a message can only be edited through the webhook that posted it, so review messages
-posted while it fell back won't get ticked off. Set notification levels per channel in
-Discord (e.g. #system on "@mentions only", so only the pings reach you). Every digest and alert is
-deduplicated in `notifications_sent`, so retries never repeat one.
-
-### #needs-review buttons
-
-Each review message gets a dropdown of categories, **Exclude**, and, once Claude has suggested a
-category (`suggest_category`), an **Accept** button. Picking or accepting categorises it exactly
-like `categorise_transaction`: it learns a rule, fixes the other uncategorised transactions with
-that description, and asks first (a reply only you see) when that's more than 25. Only
-`DISCORD_PING_USER_ID` can use them. A nightly Claude routine calls
-`get_uncategorised` with `unreviewed_only: true` and `suggest_category` for each group, so it
-looks at each transaction once (`transactions.suggested_at`) and never categorises by itself.
-
-Plain channel webhooks can't carry working buttons, so this needs a Discord application. Until
-`DISCORD_PUBLIC_KEY` is set nothing changes: no controls are sent and
-`/api/discord/interactions` is a 404. Once:
-
-1. [Developer Portal](https://discord.com/developers/applications) → *New Application*. Copy
-   *General Information → Public Key*.
-2. *Bot* → *Reset Token*, copy it (only needed for step 3). *Installation* → *Guild Install*
-   with the `bot` scope and *Manage Webhooks*; open the install link and add it to your server.
-3. Create the webhook the app owns (Developer Mode → right-click #needs-review → *Copy Channel ID*),
-   and set the URL it prints as `DISCORD_REVIEW_WEBHOOK_URL` in Vercel.
-
-   ```bash
-   DISCORD_BOT_TOKEN=... npm run discord:review-webhook -- --channel <channel id>
-   ```
-
-4. Set `DISCORD_PUBLIC_KEY` in Vercel, and redeploy. (After step 3, never before: controls sent
-   through a plain webhook don't work.)
-5. *General Information → Interactions Endpoint URL*: `https://<your-app>/api/discord/interactions`.
-   Discord checks it with a signed PING when you save; it saves only if the endpoint answers.
-
-Review messages posted through the old webhook can't be edited by the new one, so sort those
-before switching (`get_uncategorised` empty), or they stay un-ticked.
-
-### Rollout (once)
-
-1. **Migrate** (already done if you're reading this after the PR): `npm run db:migrate`. It adds
-   the tables, moves the `SALARY` rule and its transactions from Income to a new Salary category,
-   and schedules `budget-digest` (hourly) and `mcp-audit-retention` (daily) in Supabase Cron.
-2. **Clerk** (free plan):
-   - *Configure → Restrictions*: sign-up mode **Restricted**, and allowlist your email.
-   - **Register the MCP server as an OAuth resource**, with URL `https://<your-app>/api/mcp`.
-     This turns on the audience claim, so tokens carry that URL and `/api/mcp` refuses tokens
-     minted for anything else. It also turns on client registration (client ID metadata
-     documents), so Claude can register itself. The Clerk MCP connector's `configure_mcp_server`
-     does this; `check_mcp_server` then checks discovery against the deployed app. If clients
-     still can't register, enable **Dynamic client registration** under OAuth settings.
-   - *API keys*: copy the publishable and secret keys into Vercel (`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`,
-     `CLERK_SECRET_KEY`) and `.env.local`. The dashboard signs in at `/sign-in` with the same
-     instance and the same allowlist as MCP; someone Clerk lets in but `app_users` doesn't gets
-     `/not-allowed`.
-   - Only if a client can't get a token with the right audience: set `CLERK_SKIP_AUDIENCE_CHECK=true`
-     (weaker: any token from this Clerk instance is accepted) and tell me, it's tech debt.
-3. **Allow yourself in** (the app's own allowlist, on top of Clerk's): the email must be one you
-   verify in Clerk. Already done for the owner; for someone else, give them their own `--id`.
-
-   ```bash
-   npm run users:allow -- --email you@example.com
-   ```
-
-4. **Discord**: create the four channels, a webhook in each, and set the `DISCORD_*` vars in Vercel.
-5. **Deploy**: merge the PR.
-6. **Check** (writes nothing):
-
-   ```bash
-   curl -i -X POST "$APP_URL/api/mcp"      # expect 401 with WWW-Authenticate: Bearer … resource_metadata=…
-   curl "$APP_URL/.well-known/oauth-protected-resource/api/mcp"   # authorization_servers = your Clerk URL
-   curl -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/digest?dryRun=true"   # the digest and alerts as they'd post
-   ```
-
-7. **Connect Claude**: claude.ai → Settings → Connectors → *Add custom connector*, URL
-   `https://<your-app>/api/mcp`. Sign in with Clerk when asked. It then shows up in the Claude
-   mobile app too. Try "where do I stand?", "what debit orders haven't gone off?" and "help me
-   categorise what's uncategorised". (MCP Inspector also works: `npx @modelcontextprotocol/inspector`.)
-8. **Set the budget** by asking Claude, e.g. "set Groceries to R4,000 and Rent to R9,500 on the
-   1st". Until then every allocation is R0, so remaining and the daily allowance read R0.
-
-If you ever move to a new Clerk instance (e.g. development → production keys), Clerk user ids
-change: run `npm run users:allow -- --email you@example.com --unlink` and sign in again.
-
-### MCP tools
-
-Read: `get_budget_overview` (start here), `list_transactions`, `get_uncategorised`,
-`list_categories`, `list_accounts` (with each account's latest balance), `get_budget_items`,
-`get_pending_debit_orders`, `get_spending_trend`, `get_tips`, `get_sync_status`, `list_rules`.
-
-Write:
-
-| Tool | What |
-|---|---|
-| `categorise_transaction` | Sets a category and learns a rule; over 25 similar rows needs `confirm: true` |
-| `recategorise_transactions` | Moves transactions that are already filed: by description (re-points its rule), by category, or both, in a cycle or over all history; over 25 rows needs `confirm: true` |
-| `suggest_category` | Shows a guess, or "not sure", on #needs-review with an Accept button; never categorises |
-| `create_category`, `set_category_emoji` | A new category (optionally a savings one); its emoji |
-| `update_category` | Rename, archive (hidden from pickers, nothing new filed under it, budget off) or mark as savings |
-| `merge_categories` | Folds one category into another (transactions and rules move, the source is archived); always previews first |
-| `list_rules` / `delete_rule` | The learned and built-in rules; forget a learned one |
-| `set_budget_item`, `set_salary_config`, `set_notification_settings` | Budgets, salary detection, Discord digest and alerts |
-| `exclude_transaction` / `restore_transaction` | Soft delete and undo; restoring a split transaction undoes the split |
-| `add_transaction` | A transaction the bank never emailed (cash), categorised by the rules unless a category is given |
-| `split_transaction` | Divides one transaction between categories; the parts must add up exactly |
-| `set_account_label` | Names an account such as `CHEQ …1297`, or the counterparty behind description text; display only |
-| `post_status_to_discord` | The digest-style budget status and/or a note from Claude, to #budget; at most 5 posts an hour |
-| `reprocess_failed_messages` | Re-parses failed bank emails after a parser fix |
-
-No transaction is ever hard-deleted and nothing takes SQL; every query is scoped to the signed-in
-user. The only thing that is deleted outright is a learned rule (`delete_rule`), which
-categorising a transaction recreates. The dashboard's forms and the Discord buttons run the same
-commands (`src/features/commands/`), with the same rules. Every call is written to `mcp_audit_log`
-(kept 90 days) and limited to 60 a minute.
-
-Every tool declares an **output schema**: clients see the shape of its structured result, and a
-result that doesn't match it never leaves the server (`tool.ts`). The server also offers three
-**prompts** (in Claude, under the connector's prompts): `weekly_review`, `sort_inbox` and
-`plan_next_cycle` (optionally with a savings target).
-
-### Checks (Supabase SQL editor)
-
-```sql
--- What Claude has been doing.
-select at, tool, status, error, args from mcp_audit_log order by at desc limit 50;
-
--- Digests and alerts sent. Each key appears once.
-select sent_at, kind, dedupe_key from notifications_sent order by sent_at desc limit 50;
-
--- Salary credits, newest first. Each should open a cycle.
-select t.occurred_on, t.amount from transactions t join categories c on c.id = t.category_id
-where c.is_salary and t.amount > 0 and not t.is_deleted order by 1 desc;
-```
+| `src/app/` | Pages (dashboard, sign-in, privacy), API routes (`api/sync`, `api/digest`, `api/mcp`, `api/discord`) and OAuth discovery |
+| `src/features/` | Everything else, one folder per area: `bank-email`, `sync`, `transactions`, `categorisation`, `cycle`, `budget`, `commands`, `mcp`, `notifications`, … |
+| `drizzle/` | SQL migrations |
+| `scripts/` | One-off and setup scripts (Gmail auth, seed, backfill, allow a user) |

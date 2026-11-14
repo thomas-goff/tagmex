@@ -18,9 +18,10 @@ const INSTRUCTIONS = [
   'Only change data (categorise, budgets, categories, rules, settings, exclusions, added or split transactions) when the user asks or agrees; tools that would change many rows return a preview first and need confirm: true.',
 ].join(' ');
 
-// What the server says about itself on initialize. Clients such as Claude's connector list show the
-// icons; they are the app's own favicons (src/app/icon*, public/web-app-manifest-*), served from
-// whichever host the request came in on.
+// What the server says about itself on initialize. The icons are the app's own favicons
+// (src/app/icon*, public/web-app-manifest-*), served from whichever host the request came in on.
+// claude.ai doesn't use them yet: it shows a Google favicon for the last two labels of the
+// connector's hostname (on *.vercel.app, Vercel's logo), so only a custom domain changes it there.
 export function serverInfo(request?: Request) {
   const info = { name: 'tagmex', title: 'tagmex', version: '0.4.0' };
   if (!request) return info;
