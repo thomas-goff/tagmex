@@ -294,7 +294,7 @@ export function backlogEmbed(items: TransactionInfo[], failed: number, extra?: s
 
 type DigestCategory = Pick<
   CategoryLine,
-  'name' | 'emoji' | 'expenseType' | 'allocatedCents' | 'spentCents' | 'remainingCents' | 'usedPct' | 'status' | 'isActive' | 'differenceCents' | 'isSavings'
+  'name' | 'emoji' | 'expenseType' | 'allocatedCents' | 'spentCents' | 'remainingCents' | 'usedPct' | 'status' | 'isActive' | 'differenceCents' | 'isSavings' | 'transactionCount'
 >;
 
 export interface DigestInput {
@@ -344,8 +344,10 @@ function digestColour(d: DigestInput) {
   return COLOURS.green;
 }
 
-// Message one: yesterday and what needs a category, then the spending budgets: those under budget,
-// then those over (most over first).
+// Message one: yesterday and what needs a category, then every spending category: those under
+// budget, those over (most over first), then those with no budget at all — what was spent in them
+// and, last, the ones nothing has touched this cycle. Nothing is hidden: ./layout splits a card
+// too big for one message rather than cutting a list short.
 //   Yesterday: R250.00 out (2 transactions)
 //   ❔ 1 transaction (R72.00) needs a category
 export function digestEmbed(d: DigestInput, title = `☀️ Good morning, ${MASTER}`): DiscordEmbed {
@@ -358,7 +360,9 @@ export function digestEmbed(d: DigestInput, title = `☀️ Good morning, ${MAST
     lines.push(`${UNCATEGORISED_EMOJI} ${plural(d.uncategorised.count, 'transaction')} (${formatRand(Math.abs(d.uncategorised.outCents))}) ${d.uncategorised.count === 1 ? 'needs' : 'need'} a category`);
   }
 
-  const budgets = d.categories.filter((c) => c.isActive && c.allocatedCents > 0 && c.expenseType !== 'static' && !c.isSavings);
+  // Active items, plus anything spent in this cycle even if the item has since been turned off.
+  const shown = d.categories.filter((c) => c.isActive || c.spentCents !== 0);
+  const budgets = shown.filter((c) => c.allocatedCents > 0 && c.expenseType !== 'static' && !c.isSavings);
   const line = (c: DigestCategory, tail: string) => `${categoryEmoji(c.emoji)} ${escapeMarkdown(c.name)} \`${bar(c.usedPct ?? 0, 8)}\` ${c.usedPct}% · ${tail}`;
   const over = budgets
     .filter((c) => c.status === 'over')
@@ -366,9 +370,30 @@ export function digestEmbed(d: DigestInput, title = `☀️ Good morning, ${MAST
     .map((c) => line(c, `**${formatRand(-c.remainingCents)} over**`));
   const under = budgets.filter((c) => c.status !== 'over').map((c) => line(c, `${formatRand(c.remainingCents)} left`));
 
+  // Budgeted statics and savings are the other card's business; these have no budget to report
+  // against, so the digest is the only place they would show.
+  const noBudget = shown.filter((c) => c.allocatedCents === 0);
+  const used = noBudget.filter((c) => c.spentCents !== 0).sort((a, b) => b.spentCents - a.spentCents || a.name.localeCompare(b.name));
+  const untouched = noBudget.filter((c) => c.spentCents === 0);
+  const usedCents = used.reduce((sum, c) => sum + c.spentCents, 0);
+
   const fields = [];
   if (under.length > 0) fields.push(listField('🟢 Under budget', under));
   if (over.length > 0) fields.push(listField('🔴 Over budget', over));
+  if (used.length > 0) {
+    fields.push(
+      listField(
+        `⚪ No budget set · ${formatRand(usedCents)}`,
+        used.map(
+          (c) =>
+            `${categoryTag(c.name, c.emoji)} ${formatRand(c.spentCents)}${c.isSavings ? ' into savings' : ''} · ${plural(c.transactionCount, 'transaction')}`,
+        ),
+      ),
+    );
+  }
+  if (untouched.length > 0) {
+    fields.push(listField('💤 Nothing this cycle', untouched.map((c) => categoryTag(c.name, c.emoji))));
+  }
 
   return { title, ...(lines.length > 0 ? { description: lines.join('\n') } : {}), color: digestColour(d), fields };
 }
@@ -389,7 +414,7 @@ export function debitOrdersEmbed(d: DebitOrdersInput, title = '🗓️ Payday & 
   const lines = [next, d.salary ? `Last salary ${formatRand(d.salary.amountCents)} on ${d.salary.landedLabel}` : 'No salary seen this cycle yet'];
 
   const fields = [];
-  const fixed = d.categories.filter((c) => c.isActive && (c.expenseType === 'static' || c.isSavings) && c.allocatedCents > 0);
+  const fixed = d.categories.filter((c) => (c.isActive || c.spentCents !== 0) && (c.expenseType === 'static' || c.isSavings) && c.allocatedCents > 0);
   if (d.pending.length > 0) {
     fields.push(
       listField(

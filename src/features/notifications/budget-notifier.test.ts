@@ -306,6 +306,36 @@ describe('budget messages', () => {
     assert.match(debits!, /\*\*🗓️ Still to come\*\*\nNothing left this cycle\./);
   });
 
+  test('categories with no budget are listed too: what went out, then the untouched ones', () => {
+    const extra: BudgetLine[] = [
+      { categoryId: 'e', categoryName: 'Eating Out', categoryEmoji: '\u{1F354}', expenseType: 'dynamic', allocatedCents: 0, expectedDay: null, isActive: true, sortOrder: 2, isSavings: false },
+      { categoryId: 'c', categoryName: 'Clothing', categoryEmoji: '\u{1F455}', expenseType: 'dynamic', allocatedCents: 0, expectedDay: null, isActive: true, sortOrder: 3, isSavings: false },
+      { categoryId: 'v', categoryName: 'Vet', categoryEmoji: '\u{1F415}', expenseType: 'irregular', allocatedCents: 0, expectedDay: null, isActive: true, sortOrder: 4, isSavings: false },
+      { categoryId: 's', categoryName: 'Rainy Day', categoryEmoji: '\u{1F4B0}', expenseType: 'static', allocatedCents: 0, expectedDay: null, isActive: true, sortOrder: 5, isSavings: true },
+    ];
+    const row = (id: string, categoryId: string, categoryName: string, amountCents: number, isSavings = false): LedgerRow => ({ id, occurredOn: '2026-11-05', amountCents, categoryId, categoryKind: 'expense', categoryName, categoryEmoji: null, categoryIsSavings: isSavings });
+    const today = '2026-11-10';
+    const cycle = cycleContaining(today, starts, 31);
+    const s = summariseCycle({
+      cycle,
+      status: cycleStatus(cycle, today, true),
+      today,
+      rows: [row('a', 'c', 'Clothing', -150_00), row('b', 'e', 'Eating Out', -320_00), row('d', 'e', 'Eating Out', -80_00), row('f', 's', 'Rainy Day', -500_00, true)],
+      lines: [...lines, ...extra],
+    });
+    const [budgets] = digestPayloads(s).map(shown);
+    // Biggest first, savings labelled as saved rather than spent, and the count of transactions.
+    assert.match(
+      budgets!,
+      /\*\*\u26AA No budget set \u00b7 R1,050\.00\*\*\n\u{1F4B0} Rainy Day R500\.00 into savings \u00b7 1 transaction\n\u{1F354} Eating Out R400\.00 \u00b7 2 transactions\n\u{1F455} Clothing R150\.00 \u00b7 1 transaction/u,
+    );
+    // Then the ones nothing has touched, so every category is accounted for.
+    assert.match(budgets!, /\*\*\u{1F4A4} Nothing this cycle\*\*\n\u{1F415} Vet$/u);
+    // A budget still leads, and a budgeted debit order stays on the other card.
+    assert.match(budgets!, /\*\*\u{1F7E2} Under budget\*\*\n\u{1F6D2} Groceries /u);
+    assert.doesNotMatch(budgets!, /Insurance/);
+  });
+
   test('a digest too big for one message is split, never cut short', () => {
     const many: BudgetLine[] = Array.from({ length: 120 }, (_, i) => ({
       categoryId: `c${i}`,
