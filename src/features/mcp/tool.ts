@@ -36,7 +36,7 @@ export interface AuditLog {
 export interface ToolDeps {
   // Every write: the same commands the dashboard and the Discord buttons run.
   commands: Commands;
-  budget: Pick<BudgetService, 'summary' | 'overview' | 'trend' | 'context'>;
+  budget: Pick<BudgetService, 'summary' | 'overview' | 'trend' | 'context' | 'cycleFor'>;
   // Reads only.
   repo: Pick<BudgetRepo, 'listCategories' | 'ensureBudgetItems' | 'listBudgetLines' | 'listTransactions' | 'listKnownDescriptions' | 'listRules'>;
   accounts: Pick<AccountLabelRepo, 'listAccounts' | 'listLabels'>;

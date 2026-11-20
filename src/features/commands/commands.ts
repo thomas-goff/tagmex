@@ -78,7 +78,7 @@ export class CommandError extends Error {
 }
 
 export interface CommandDeps {
-  budget: Pick<BudgetService, 'summary' | 'context'>;
+  budget: Pick<BudgetService, 'summary' | 'context' | 'cycleFor'>;
   repo: Pick<
     BudgetRepo,
     | 'findTransaction'
@@ -120,12 +120,18 @@ export function createCommands(deps: CommandDeps) {
   const now = deps.now ?? (() => new Date());
 
   // A category the user can file things under. Archived ones are refused unless the caller is
-  // acting on the category itself.
-  async function category(userId: string, ref: string, { archived = false } = {}) {
-    const found = findCategory(await deps.repo.listCategories(userId), ref);
+  // acting on the category itself. `categoryIn` resolves against a list already in hand, so a
+  // command that resolves two refs, or that needs the list for something else as well, reads the
+  // categories once instead of once per ref.
+  function categoryIn(all: readonly CategoryInfo[], ref: string, { archived = false } = {}) {
+    const found = findCategory(all, ref);
     if (!found) throw new CommandError('unknown_category', `No category "${ref}".`);
     if (found.isArchived && !archived) throw new CommandError('archived_category', `${found.name} is archived.`);
     return found;
+  }
+
+  async function category(userId: string, ref: string, opts: { archived?: boolean } = {}) {
+    return categoryIn(await deps.repo.listCategories(userId), ref, opts);
   }
 
   async function transaction(userId: string, id: string) {
@@ -163,13 +169,14 @@ export function createCommands(deps: CommandDeps) {
       if (input.description === undefined && input.fromCategory === undefined) {
         throw new CommandError('nothing_to_change', 'Say which transactions: a description, a category to move them from, or both.');
       }
-      const target = await category(userId, input.toCategory);
-      const from = input.fromCategory === undefined ? null : await category(userId, input.fromCategory, { archived: true });
+      const all = await deps.repo.listCategories(userId);
+      const target = categoryIn(all, input.toCategory);
+      const from = input.fromCategory === undefined ? null : categoryIn(all, input.fromCategory, { archived: true });
       const description = input.description === undefined ? undefined : normaliseManualDescription(input.description);
 
       let range: { from?: string; to?: string } = {};
       if (input.cycleRef) {
-        const { cycle, status } = await deps.budget.summary(userId, input.cycleRef);
+        const { cycle, status } = await deps.budget.cycleFor(userId, input.cycleRef);
         // The current cycle stays open past its projected end while the salary is late.
         range = { from: cycle.start, to: status.isCurrent ? undefined : cycle.end };
       }
@@ -197,11 +204,12 @@ export function createCommands(deps: CommandDeps) {
       if (tx.categorySource !== 'none') {
         throw new CommandError('already_categorised', `That transaction is already categorised as ${tx.categoryName ?? 'something'}.`);
       }
-      const target = input.category === null ? null : await category(userId, input.category);
+      const all = await deps.repo.listCategories(userId);
+      const target = input.category === null ? null : categoryIn(all, input.category);
 
       const similar = input.applyToSimilar ? await deps.ledger.corrector.findSimilar(userId, tx.id) : [];
       const ids = await deps.repo.setSuggestion(userId, [tx.id, ...similar], { categoryId: target?.id ?? null, note: input.note });
-      const pickable = (await deps.repo.listCategories(userId)).filter((c) => !c.isArchived);
+      const pickable = all.filter((c) => !c.isArchived);
       await deps.review.suggest(userId, ids, { category: target, note: input.note }, pickable);
       return { tx, category: target, suggested: ids.length };
     },
@@ -273,8 +281,9 @@ export function createCommands(deps: CommandDeps) {
     // Folds one category into another: its transactions and rules move, and it is archived. Always
     // previews first; it isn't undone by a single call.
     async mergeCategories(userId: string, input: { from: string; into: string; confirm: boolean }) {
-      const from = await category(userId, input.from, { archived: true });
-      const into = await category(userId, input.into);
+      const all = await deps.repo.listCategories(userId);
+      const from = categoryIn(all, input.from, { archived: true });
+      const into = categoryIn(all, input.into);
       if (from.id === into.id) throw new CommandError('cannot_merge', 'Those are the same category.');
       if (from.isSystem) throw new CommandError('system_category', `${from.name} is a built-in category (${from.kind}) and can't be merged away.`);
       if (from.kind !== into.kind) throw new CommandError('cannot_merge', `${from.name} is ${from.kind} and ${into.name} is ${into.kind}: only categories of the same kind merge.`);
@@ -314,8 +323,8 @@ export function createCommands(deps: CommandDeps) {
       await deps.repo.ensureBudgetItems(userId);
       const { current } = await deps.budget.context(userId);
       const effectiveFrom = from === 'next' ? addDays(current.start, 1) : current.start;
-      await deps.repo.updateBudgetItem(userId, target.id, patch, effectiveFrom);
-      const line = (await deps.repo.listBudgetLines(userId, effectiveFrom)).find((l) => l.categoryId === target.id)!;
+      // The write hands back the version it wrote, which is the one in force on effectiveFrom.
+      const line = (await deps.repo.updateBudgetItem(userId, target.id, patch, effectiveFrom))!;
       return { ...line, effectiveFrom, appliesFrom: from, cycle: current };
     },
 
@@ -340,7 +349,7 @@ export function createCommands(deps: CommandDeps) {
     // Forgets a learned rule. What it already categorised stays as it is; future emails with that
     // description fall back to the merchant rules, or arrive uncategorised.
     async deleteRule(userId: string, ruleId: string) {
-      const rule = (await deps.repo.listRules(userId)).find((r) => r.id === ruleId);
+      const [rule] = await deps.repo.listRules(userId, { id: ruleId });
       if (!rule) throw new CommandError('unknown_rule', `No rule ${ruleId}.`);
       if (rule.origin === 'seed') {
         throw new CommandError('seed_rule', `"${rule.pattern}" is a built-in merchant rule. Categorise one of its transactions instead: a learned rule outranks it.`);
@@ -431,14 +440,15 @@ export function createCommands(deps: CommandDeps) {
       if (patch.expectedSalaryCents === 0) {
         throw new CommandError('zero_salary', 'The expected salary must be more than R0.');
       }
-      await deps.repo.updateSettings(userId, patch);
-      const [settings, { cycle }] = await Promise.all([deps.repo.getSettings(userId), deps.budget.summary(userId)]);
-      return { settings, cycle };
+      // context() resolves the current cycle under the new settings and hands back those settings,
+      // so this is one read: the old pair re-read the settings and summarised the whole cycle.
+      const settings = await deps.repo.updateSettings(userId, patch);
+      const { current } = await deps.budget.context(userId);
+      return { settings, cycle: current };
     },
 
     async setNotificationSettings(userId: string, patch: Pick<Partial<Settings>, 'digestEnabled' | 'digestHour' | 'discordAlertsEnabled'>) {
-      await deps.repo.updateSettings(userId, patch);
-      return deps.repo.getSettings(userId);
+      return deps.repo.updateSettings(userId, patch);
     },
 
     // A soft delete: the transaction leaves every total until it's restored. Excluding one that

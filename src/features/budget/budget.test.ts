@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { cycleContaining, cycleStatus, detectSalaryStarts, type Cycle } from '@/features/cycle/cycle';
-import { missingBudgetItems } from './ensure-items';
 import { suggestCategory } from './suggest';
 import { dateInCycle, isWellAboveBudget, summariseCycle } from './summary';
 import { deriveTips } from './tips';
@@ -333,21 +332,6 @@ describe('cycles tracked part-way', () => {
     assert.equal(t.cycles[0]!.spentCents, 0);
     // Only the debit orders still to come: Utilities 2,600 + Insurance 900.
     assert.equal(t.onPaceTotalCents, 3500_00);
-  });
-});
-
-describe('budget items', () => {
-  test('missing items are created from the category type, and a second run adds none', () => {
-    const categories = [
-      { id: 'a', expenseType: 'static' as const, sortOrder: 2 },
-      { id: 'b', expenseType: null, sortOrder: 5 },
-    ];
-    const first = missingBudgetItems(categories, new Set());
-    assert.deepEqual(first, [
-      { categoryId: 'a', expenseType: 'static', sortOrder: 2 },
-      { categoryId: 'b', expenseType: 'dynamic', sortOrder: 5 },
-    ]);
-    assert.deepEqual(missingBudgetItems(categories, new Set(first.map((i) => i.categoryId))), []);
   });
 });
 

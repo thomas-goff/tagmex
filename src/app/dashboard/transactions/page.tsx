@@ -26,8 +26,10 @@ export default async function Transactions({ searchParams }: PageProps<'/dashboa
   const showExcluded = param(sp.excluded) === '1';
   const after = param(sp.after)?.split('_');
 
+  // cycleFor, not summary: this screen only needs the cycle's dates to filter by, and summarising
+  // it would read every budget version and scan the cycle's ledger a second time for nothing.
   const [summary, categories] = await Promise.all([
-    budget.summary(userId, cycleParam && isIsoDate(cycleParam) ? cycleParam : undefined),
+    budget.cycleFor(userId, cycleParam && isIsoDate(cycleParam) ? cycleParam : undefined),
     budgetRepo.listCategories(userId),
   ]);
   const { cycle } = summary;

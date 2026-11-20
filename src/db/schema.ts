@@ -69,19 +69,25 @@ export const ingestedMessages = pgTable(
   (t) => [index('ingested_messages_status_idx').on(t.mailboxConnectionId, t.status)],
 ).enableRLS();
 
-export const syncRuns = pgTable('sync_runs', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  // Null when the run failed before reaching Gmail (e.g. a dead refresh token).
-  mailboxConnectionId: uuid('mailbox_connection_id').references(() => mailboxConnections.id),
-  retryFailed: boolean('retry_failed').notNull().default(false),
-  startedAt: timestamptz('started_at').notNull().defaultNow(),
-  finishedAt: timestamptz('finished_at'),
-  fetched: integer('fetched').notNull().default(0),
-  parsed: integer('parsed').notNull().default(0),
-  ignored: integer('ignored').notNull().default(0),
-  failed: integer('failed').notNull().default(0),
-  error: text('error'),
-}).enableRLS();
+export const syncRuns = pgTable(
+  'sync_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    // Null when the run failed before reaching Gmail (e.g. a dead refresh token).
+    mailboxConnectionId: uuid('mailbox_connection_id').references(() => mailboxConnections.id),
+    retryFailed: boolean('retry_failed').notNull().default(false),
+    startedAt: timestamptz('started_at').notNull().defaultNow(),
+    finishedAt: timestamptz('finished_at'),
+    fetched: integer('fetched').notNull().default(0),
+    parsed: integer('parsed').notNull().default(0),
+    ignored: integer('ignored').notNull().default(0),
+    failed: integer('failed').notNull().default(0),
+    error: text('error'),
+  },
+  // The table had nothing but its primary key, and one row is appended per sync run, so the health
+  // and digest reads of "the latest run for this connection" sorted the whole table for one row.
+  (t) => [index('sync_runs_connection_started_idx').on(t.mailboxConnectionId, t.startedAt.desc())],
+).enableRLS();
 
 export const categoryKind = pgEnum('category_kind', CATEGORY_KINDS);
 export const expenseType = pgEnum('expense_type', EXPENSE_TYPES);
@@ -192,6 +198,18 @@ export const transactions = pgTable(
     index('transactions_user_occurred_idx').on(t.userId, t.occurredOn),
     index('transactions_user_category_idx').on(t.userId, t.categoryId),
     index('transactions_split_of_idx').on(t.splitOf),
+    // listRules counts the transactions each rule categorised, and deleting a rule has to find
+    // them to null the column (on delete set null). Without this, both scan the whole table once
+    // per rule: 44 rules over a 2 184-row ledger measured as 44 sequential scans in one query.
+    // Partial because only a rule-categorised row carries one, which is the minority.
+    index('transactions_rule_idx').on(t.ruleId).where(sql`${t.ruleId} is not null`),
+    // "What still needs a category": read on every ingest (apply-rules), by the MCP
+    // get_uncategorised tool and by the dashboard's uncategorised notice. category_source is not
+    // indexed otherwise, so each of those scanned the user's whole ledger to find a handful of
+    // rows. The set is deliberately kept near-empty, so the partial index stays tiny.
+    index('transactions_user_uncategorised_idx')
+      .on(t.userId, t.occurredOn)
+      .where(sql`${t.categorySource} = 'none' and not ${t.isDeleted}`),
   ],
 ).enableRLS();
 
@@ -236,8 +254,9 @@ export const budgetItems = pgTable(
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (t) => [
+    // The unique constraint is itself a btree on these columns, so it serves every lookup and sort
+    // a separate index would. 0013 added one anyway; 0015 drops it again.
     unique('budget_items_user_category_effective_unique').on(t.userId, t.categoryId, t.effectiveFrom),
-    index('budget_items_user_category_idx').on(t.userId, t.categoryId, t.effectiveFrom),
     check('budget_items_allocated_non_negative', sql`${t.allocated} >= 0`),
     check('budget_items_expected_day_range', sql`${t.expectedDay} between 1 and 31`),
   ],

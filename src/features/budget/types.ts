@@ -48,6 +48,9 @@ export interface Settings {
   discordAlertsEnabled: boolean;
 }
 
+// These must stay equal to the `user_settings` column defaults in src/db/schema.ts: getSettings
+// returns these when the user has no row yet rather than creating one, so the two are the same
+// answer by different routes.
 export const DEFAULT_SETTINGS: Settings = {
   salaryDayHint: 31,
   expectedSalaryCents: null,
