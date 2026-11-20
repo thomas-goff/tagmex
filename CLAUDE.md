@@ -33,7 +33,7 @@ Run all three before calling a change done; CI runs the same. `npm run build` lo
 | `src/features/mcp/` | Clerk OAuth check (`auth.ts`, `clerk.ts`), the tool wrapper (`tool.ts`), tools (`tools/read.ts`, `tools/write.ts`), output shapes (`format.ts`), prompts (`prompts.ts`), server and instructions (`server.ts`) |
 | `src/features/notifications/` | Discord: messages written as embeds (`embeds.ts`) and turned into Components V2 cards (`layout.ts`); digest and alerts; claim-before-post dedupe (`claims.ts`); #needs-review controls; #system alerts |
 | `src/app/api/` | `sync` and `digest` (cron, `CRON_SECRET`), `mcp`, `discord/interactions`, `health`, `jobs/heartbeat` |
-| `src/app/dashboard/` | The signed-in dashboard; Server Actions in `actions.ts` |
+| `src/app/dashboard/` | The signed-in dashboard; Server Actions in `actions.ts`; the shell (sticky app bar, bottom tab bar) in `layout.tsx` / `nav.tsx` |
 | `src/proxy.ts`, `src/features/auth/session.ts` | Clerk session: the proxy redirects signed-out dashboard visits; `requireUser()` is the real check on every page and action |
 | `src/db/schema.ts`, `drizzle/` | Schema and migrations |
 
@@ -73,6 +73,12 @@ tool has a title, annotations and an output schema, and that read tools answer w
 ## Gotchas
 
 - `AGENTS.md` is rewritten by `next dev`; leave its block alone.
+- **The dashboard is mobile-first**: `dashboard.module.css` reads as the phone, and
+  `@media (min-width: 768px)` adds the wide layout. Keep every field at 16px or more on mobile
+  (iOS zooms the page at anything smaller) and every tap target at `var(--tap)`.
+- `.appbar` must stay sticky, opaque and full width at the top edge: iOS 26 takes the status bar
+  colour from the topmost element, and iOS 27 draws a blur band over an installed web app without
+  it. It paints into `env(safe-area-inset-top)`; the tab bar does the same at the bottom.
 - `serverInfo.icons` in `src/features/mcp/server.ts` is correct per the MCP spec, but claude.ai
   ignores it and shows a Google favicon for the connector URL's last two hostname labels
   (`vercel.app` → Vercel's logo). Only a custom domain changes the icon there.

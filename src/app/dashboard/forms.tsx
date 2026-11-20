@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useRef, useState } from 'react';
 import type { ExpenseType } from '@/features/categorisation/types';
 import {
   categoriseAction,
@@ -30,15 +30,27 @@ function Feedback({ state }: { state: ActionState }) {
   );
 }
 
-// Pick a category for a transaction. Learns a rule for its description; when that would also change
-// many similar transactions, asks first.
+// Pick a category for a transaction. Picking saves straight away: on a phone a separate Save
+// button is a second small target for no gain. Learns a rule for the description; when that would
+// also change many similar transactions, asks first.
 export function CategoriseForm({ transactionId, categories, currentId }: { transactionId: string; categories: CategoryOption[]; currentId: string | null }) {
   const [state, action, pending] = useActionState(categoriseAction, null);
   const [choice, setChoice] = useState(currentId ?? '');
+  const form = useRef<HTMLFormElement>(null);
   return (
-    <form action={action} className={styles.inlineForm}>
+    <form action={action} ref={form} className={styles.inlineForm}>
       <input type="hidden" name="transactionId" value={transactionId} />
-      <select name="categoryId" value={choice} onChange={(e) => setChoice(e.target.value)} aria-label="Category">
+      <select
+        name="categoryId"
+        className={styles.categorySelect}
+        value={choice}
+        disabled={pending}
+        onChange={(e) => {
+          setChoice(e.target.value);
+          if (e.target.value !== currentId) form.current?.requestSubmit();
+        }}
+        aria-label="Category"
+      >
         <option value="" disabled>
           Choose…
         </option>
@@ -48,16 +60,12 @@ export function CategoriseForm({ transactionId, categories, currentId }: { trans
           </option>
         ))}
       </select>
-      {state?.confirm ? (
+      {state?.confirm && (
         <button className={cx(styles.button, styles.primary, styles.small)} name="confirm" value="1" disabled={pending}>
           Yes, all {state.confirm.wouldAlsoChange + 1}
         </button>
-      ) : (
-        <button className={cx(styles.button, styles.small)} disabled={pending || !choice || choice === currentId}>
-          {pending ? 'Saving…' : 'Save'}
-        </button>
       )}
-      <Feedback state={state} />
+      {pending ? <span className={styles.subtle}>Saving…</span> : <Feedback state={state} />}
     </form>
   );
 }
@@ -87,37 +95,48 @@ export interface BudgetRowValues {
   isActive: boolean;
 }
 
+// One category's budget. A stack of labelled fields on a phone; the same fields line up under the
+// header row from 768px up, where .fieldLabel is hidden.
 export function BudgetRowForm({ row }: { row: BudgetRowValues }) {
   const [state, action, pending] = useActionState(saveBudgetItemAction, null);
   const [type, setType] = useState(row.expenseType);
   return (
     <form action={action} className={styles.budgetRow}>
       <input type="hidden" name="categoryId" value={row.categoryId} />
-      <input name="emoji" defaultValue={row.emoji} aria-label={`${row.name} emoji`} maxLength={16} />
-      <span className={styles.cardName} title={row.name}>
+      <span className={styles.budgetEmoji}>
+        <input name="emoji" defaultValue={row.emoji} aria-label={`${row.name} emoji`} maxLength={16} />
+      </span>
+      <span className={styles.budgetName} title={row.name}>
         {row.name}
       </span>
-      <input name="allocated" defaultValue={row.allocated} inputMode="decimal" aria-label={`${row.name} budget per cycle`} />
-      <select name="expenseType" value={type} onChange={(e) => setType(e.target.value as ExpenseType)} aria-label={`${row.name} type`}>
-        <option value="dynamic">Dynamic</option>
-        <option value="static">Static</option>
-        <option value="irregular">Irregular</option>
-      </select>
-      <input
-        name="expectedDay"
-        defaultValue={row.expectedDay ?? ''}
-        inputMode="numeric"
-        placeholder={type === 'static' ? 'Day' : '—'}
-        disabled={type !== 'static'}
-        aria-label={`${row.name} debit order day`}
-      />
-      <label className={cx(styles.field, styles.check)} title="Money moved here is saved, not spent">
-        <input type="checkbox" name="savings" defaultChecked={row.isSavings} /> Savings
+      <label className={styles.budgetAlloc}>
+        <span className={styles.fieldLabel}>Per cycle</span>
+        <input name="allocated" defaultValue={row.allocated} inputMode="decimal" aria-label={`${row.name} budget per cycle`} />
       </label>
-      <label className={cx(styles.field, styles.check)}>
-        <input type="checkbox" name="active" defaultChecked={row.isActive} /> Active
+      <label className={styles.budgetType}>
+        <span className={styles.fieldLabel}>Type</span>
+        <select name="expenseType" value={type} onChange={(e) => setType(e.target.value as ExpenseType)} aria-label={`${row.name} type`}>
+          <option value="dynamic">Dynamic</option>
+          <option value="static">Static</option>
+          <option value="irregular">Irregular</option>
+        </select>
       </label>
-      <span className={styles.inlineForm}>
+      {/* Only static items have a debit order day; the action ignores it for the rest. */}
+      {type === 'static' && (
+        <label className={styles.budgetDay}>
+          <span className={styles.fieldLabel}>Debit order day</span>
+          <input name="expectedDay" defaultValue={row.expectedDay ?? ''} inputMode="numeric" placeholder="Day of the month" aria-label={`${row.name} debit order day`} />
+        </label>
+      )}
+      <span className={styles.budgetFlags}>
+        <label className={cx(styles.field, styles.check)} title="Money moved here is saved, not spent">
+          <input type="checkbox" name="savings" defaultChecked={row.isSavings} /> Savings
+        </label>
+        <label className={cx(styles.field, styles.check)}>
+          <input type="checkbox" name="active" defaultChecked={row.isActive} /> Active
+        </label>
+      </span>
+      <span className={styles.budgetSave}>
         <button className={cx(styles.button, styles.small)} disabled={pending}>
           {pending ? 'Saving…' : 'Save'}
         </button>
@@ -189,7 +208,7 @@ export function AccountLabelForm({ row }: { row: AccountRowValues }) {
   return (
     <form action={action} className={styles.accountRow}>
       <input type="hidden" name="account" value={row.key} />
-      <span>
+      <span className={styles.accountName}>
         {row.shown}
         {row.available && <span className={styles.subtle}> · {row.available}</span>}
       </span>
@@ -212,7 +231,7 @@ export function SalaryForm({ salaryDay, expectedSalary, tolerancePct }: { salary
       <div className={styles.formGrid}>
         <label className={styles.field}>
           Salary day (31 = month end)
-          <input name="salaryDay" type="number" min={1} max={31} defaultValue={salaryDay} required />
+          <input name="salaryDay" type="number" inputMode="numeric" min={1} max={31} defaultValue={salaryDay} required />
         </label>
         <label className={styles.field}>
           Expected amount (empty = any)
@@ -220,7 +239,7 @@ export function SalaryForm({ salaryDay, expectedSalary, tolerancePct }: { salary
         </label>
         <label className={styles.field}>
           Tolerance %
-          <input name="tolerancePct" type="number" min={0} max={100} defaultValue={tolerancePct} required />
+          <input name="tolerancePct" type="number" inputMode="numeric" min={0} max={100} defaultValue={tolerancePct} required />
         </label>
       </div>
       <div className={styles.formActions}>
@@ -243,7 +262,7 @@ export function NotificationsForm({ digestEnabled, digestHour, alertsEnabled }: 
         </label>
         <label className={styles.field}>
           Digest from (hour, SA time)
-          <input name="digestHour" type="number" min={0} max={23} defaultValue={digestHour} required />
+          <input name="digestHour" type="number" inputMode="numeric" min={0} max={23} defaultValue={digestHour} required />
         </label>
         <label className={cx(styles.field, styles.check)}>
           <input type="checkbox" name="alertsEnabled" defaultChecked={alertsEnabled} /> Budget alerts

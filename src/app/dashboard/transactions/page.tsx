@@ -2,8 +2,7 @@ import Link from 'next/link';
 import { requireUser } from '@/features/auth/session';
 import { budget, budgetRepo } from '@/features/budget';
 import { categoryEmoji, UNCATEGORISED_EMOJI } from '@/features/categorisation/emoji';
-import { addDays, isIsoDate } from '@/features/cycle/dates';
-import { shortDate } from '@/features/cycle/dates';
+import { addDays, isIsoDate, shortDate } from '@/features/cycle/dates';
 import { formatRand } from '@/features/transactions/money';
 import styles from '../dashboard.module.css';
 import { CategoriseForm, ExcludeButton, type CategoryOption } from '../forms';
@@ -16,6 +15,7 @@ function param(value: string | string[] | undefined) {
 }
 
 // A cycle's transactions, newest first, filterable; each one can be (re)categorised or excluded.
+// One card per transaction on a phone; from 768px up the same markup lays out as a row.
 export default async function Transactions({ searchParams }: PageProps<'/dashboard/transactions'>) {
   const { userId } = await requireUser();
   const sp = await searchParams;
@@ -73,8 +73,8 @@ export default async function Transactions({ searchParams }: PageProps<'/dashboa
 
       <form className={styles.filters}>
         <input type="hidden" name="cycle" value={cycle.id} />
-        <input name="q" placeholder="Search descriptions" defaultValue={search} aria-label="Search descriptions" />
-        <select name="category" defaultValue={categoryId ?? ''} aria-label="Category">
+        <input className={styles.filterSearch} name="q" type="search" placeholder="Search descriptions" defaultValue={search} aria-label="Search descriptions" />
+        <select className={styles.filterCategory} name="category" defaultValue={categoryId ?? ''} aria-label="Category">
           <option value="">All categories</option>
           {options.map((c) => (
             <option key={c.id} value={c.id}>
@@ -82,58 +82,44 @@ export default async function Transactions({ searchParams }: PageProps<'/dashboa
             </option>
           ))}
         </select>
-        <label className={cx(styles.field, styles.check)}>
-          <input type="checkbox" name="uncategorised" value="1" defaultChecked={uncategorisedOnly} /> Uncategorised only
-        </label>
-        <label className={cx(styles.field, styles.check)}>
-          <input type="checkbox" name="excluded" value="1" defaultChecked={showExcluded} /> Show excluded
-        </label>
-        <button className={styles.button}>Filter</button>
+        <button className={cx(styles.button, styles.primary, styles.filterGo)}>Filter</button>
+        <div className={styles.filterRow}>
+          <label className={cx(styles.field, styles.check)}>
+            <input type="checkbox" name="uncategorised" value="1" defaultChecked={uncategorisedOnly} /> Uncategorised only
+          </label>
+          <label className={cx(styles.field, styles.check)}>
+            <input type="checkbox" name="excluded" value="1" defaultChecked={showExcluded} /> Show excluded
+          </label>
+        </div>
       </form>
 
       {transactions.length === 0 ? (
         <p className={styles.subtle}>No transactions match.</p>
       ) : (
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Description</th>
-                <th className={styles.num}>Amount</th>
-                <th>Category</th>
-                <th>Account</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {transactions.map((t) => (
-                <tr key={t.id} className={cx(t.isDeleted && styles.excluded)}>
-                  <td>{shortDate(t.occurredOn)}</td>
-                  <td className={styles.desc}>
-                    {t.categoryId ? categoryEmoji(t.categoryEmoji) : UNCATEGORISED_EMOJI} {t.description}
-                    {t.reserved && <span className={styles.subtle}> · pending</span>}
-                    {t.splitOf && <span className={styles.subtle}> · part of a split</span>}
-                  </td>
-                  <td className={cx(styles.num, t.amountCents < 0 ? styles.out : styles.in)}>{formatRand(t.amountCents)}</td>
-                  <td>
-                    {t.isDeleted ? (
-                      <span className={styles.subtle}>Excluded</span>
-                    ) : (
-                      <CategoriseForm transactionId={t.id} categories={options} currentId={t.categoryId} />
-                    )}
-                  </td>
-                  <td className={styles.subtle}>
-                    {t.accountType} …{t.accountLast4}
-                  </td>
-                  <td>
-                    <ExcludeButton transactionId={t.id} excluded={t.isDeleted} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ul className={styles.txList}>
+          {transactions.map((t) => (
+            <li key={t.id} className={cx(styles.tx, t.isDeleted && styles.excluded)}>
+              <span className={styles.txDesc}>
+                <span className={styles.emoji} aria-hidden>
+                  {t.categoryId ? categoryEmoji(t.categoryEmoji) : UNCATEGORISED_EMOJI}
+                </span>
+                {t.description}
+              </span>
+              <span className={cx(styles.txAmount, t.amountCents < 0 ? styles.out : styles.in)}>{formatRand(t.amountCents)}</span>
+              <span className={styles.txMeta}>
+                {shortDate(t.occurredOn)} · {t.accountType} …{t.accountLast4}
+                {t.reserved && ' · pending'}
+                {t.splitOf && ' · part of a split'}
+              </span>
+              <span className={styles.txCategory}>
+                {t.isDeleted ? <span className={styles.subtle}>Excluded</span> : <CategoriseForm transactionId={t.id} categories={options} currentId={t.categoryId} />}
+              </span>
+              <span className={styles.txExclude}>
+                <ExcludeButton transactionId={t.id} excluded={t.isDeleted} />
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
 
       {next && (
