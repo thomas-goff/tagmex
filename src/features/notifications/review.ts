@@ -104,21 +104,27 @@ export function createReviewMessages(
     async resolve(userId, transactionIds, result) {
       if (transactionIds.length === 0) return 0;
       const outcome = outcomeText(result);
-      let edited = 0;
+      // Every row is marked with the same thing, so the ids are collected and written once at the
+      // end rather than one update per message: a bulk categorisation resolves as many rows as it
+      // touched. A message is still only marked once its edit has gone through, so one that fails
+      // is left open for the next run.
+      const resolved: string[] = [];
       try {
         for (const m of await openMessages(userId, transactionIds)) {
           try {
             await edit('review', m.messageId, resolvedReviewMessage(m.content, outcome));
-            await db.update(discordMessages).set({ resolvedAt: new Date() }).where(eq(discordMessages.id, m.id));
-            edited++;
+            resolved.push(m.id);
           } catch (err) {
             log.error('editing a #needs-review message failed', err);
           }
         }
+        if (resolved.length > 0) {
+          await db.update(discordMessages).set({ resolvedAt: new Date() }).where(inArray(discordMessages.id, resolved));
+        }
       } catch (err) {
         log.error('resolving #needs-review messages failed', err);
       }
-      return edited;
+      return resolved.length;
     },
 
     async suggest(userId, transactionIds, suggestion, categories) {

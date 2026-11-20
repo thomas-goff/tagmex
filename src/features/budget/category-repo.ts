@@ -228,14 +228,17 @@ export function createCategoryRepo(db: Database) {
     // Writes the version effective from `effectiveFrom`, carrying forward whatever the patch leaves
     // out from the version in force then. Dating it past the current cycle's start is what "from
     // next cycle" means: the cycle being reported now keeps the figures it already had.
+    // Returns the version it wrote, or null when the category has no budget item to extend. The
+    // row it returns is by definition the one in force on `effectiveFrom`, so a caller that wants
+    // the new figures already has them: reading them back cost a second pass over every version.
     async updateBudgetItem(
       userId: string,
       categoryId: string,
       patch: { allocatedCents?: number; expenseType?: ExpenseType; expectedDay?: number | null; isActive?: boolean },
       effectiveFrom: string,
-    ) {
+    ): Promise<BudgetLine | null> {
       const base = versionToExtend(await listBudgetLineVersions(userId), categoryId, effectiveFrom);
-      if (!base) return false;
+      if (!base) return null;
       const merged = {
         expenseType: patch.expenseType ?? base.expenseType,
         allocatedCents: patch.allocatedCents ?? base.allocatedCents,
@@ -265,7 +268,7 @@ export function createCategoryRepo(db: Database) {
           },
         })
         .returning({ id: budgetItems.id });
-      return written.length > 0;
+      return written.length > 0 ? { ...base, ...merged } : null;
     },
 
     // Drops a version that has not taken effect yet. The one exception to nothing being deleted:
@@ -287,8 +290,10 @@ export function createCategoryRepo(db: Database) {
       return removed.length > 0;
     },
 
-    // Rules with the category each points at, newest first. `origin` narrows to learned or seed.
-    async listRules(userId: string, filter: { origin?: RuleOrigin; categoryId?: string } = {}): Promise<RuleInfo[]> {
+    // Rules with the category each points at, newest first. `origin` narrows to learned or seed,
+    // and `id` to one rule -- each row costs a count of the transactions it categorised, so asking
+    // for one rule is much cheaper than loading every rule to pick one out.
+    async listRules(userId: string, filter: { origin?: RuleOrigin; categoryId?: string; id?: string } = {}): Promise<RuleInfo[]> {
       return db
         .select({
           id: categoryRules.id,
@@ -308,6 +313,7 @@ export function createCategoryRepo(db: Database) {
             eq(categoryRules.userId, userId),
             filter.origin ? eq(categoryRules.origin, filter.origin) : undefined,
             filter.categoryId ? eq(categoryRules.categoryId, filter.categoryId) : undefined,
+            filter.id ? eq(categoryRules.id, filter.id) : undefined,
           ),
         )
         .orderBy(desc(categoryRules.updatedAt), asc(categoryRules.pattern));

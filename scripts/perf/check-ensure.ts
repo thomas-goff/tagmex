@@ -1,3 +1,6 @@
+// Checks ensureBudgetItems against a real database: the R0 row it writes, that a second run adds
+// nothing, and that a category with only a future-dated version gets no extra row. It deletes and
+// recreates budget items, so point DATABASE_URL at a local copy only.
 import { loadEnvConfig } from '@next/env';
 loadEnvConfig(process.cwd());
 import { createDb } from '@/db/client';

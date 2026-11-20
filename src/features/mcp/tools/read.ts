@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { createLabeller } from '@/features/accounts/labels';
 import { suggestCategory } from '@/features/budget/suggest';
 import type { CycleSummary } from '@/features/budget/summary';
-import { deriveTips, type Tip } from '@/features/budget/tips';
+import type { Tip } from '@/features/budget/tips';
 import { MAX_TREND_CYCLES } from '@/features/budget/service';
 import { findCategory } from '@/features/transactions/correct-category';
 import {
@@ -576,8 +576,8 @@ const getTips = defineTool({
   output: z.object({ tips: z.array(tipSchema) }),
   annotations: { ...readOnly, title: 'Budget tips' },
   async run(_args, { principal, deps }) {
-    const { summary, previous } = await deps.budget.overview(principal.userId);
-    const tips = deriveTips({ current: summary, previous });
+    // overview() derives these itself; deriving them again here only did the same work twice.
+    const { tips } = await deps.budget.overview(principal.userId);
     return {
       text: tips.length === 0 ? 'Nothing to flag.' : tips.map((t) => `(${t.severity}) ${t.message}`).join('\n'),
       data: { tips: tipsJson(tips) },

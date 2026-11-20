@@ -340,7 +340,7 @@ export function fakeWorld({ now = () => new Date(`${TODAY}T10:00:00Z`) }: { now?
       effectiveFrom: string,
     ) {
       const base = versionToExtend(await repo.listBudgetLineVersions(userId), categoryId, effectiveFrom);
-      if (!base) return false;
+      if (!base) return null;
       const existing = budgetItems.find((x) => x.userId === userId && x.categoryId === categoryId && x.effectiveFrom === effectiveFrom);
       const merged = {
         expenseType: base.expenseType,
@@ -351,7 +351,7 @@ export function fakeWorld({ now = () => new Date(`${TODAY}T10:00:00Z`) }: { now?
       };
       if (existing) Object.assign(existing, merged);
       else budgetItems.push({ userId, categoryId, effectiveFrom, sortOrder: base.sortOrder, ...merged });
-      return true;
+      return { ...base, ...merged };
     },
     async deleteScheduledBudgetItem(userId: string, categoryId: string, effectiveFrom: string, after: string) {
       if (effectiveFrom <= after) return false;
@@ -360,9 +360,15 @@ export function fakeWorld({ now = () => new Date(`${TODAY}T10:00:00Z`) }: { now?
       budgetItems.splice(i, 1);
       return true;
     },
-    async listRules(userId: string, filter: { origin?: 'learned' | 'seed'; categoryId?: string } = {}): Promise<RuleInfo[]> {
+    async listRules(userId: string, filter: { origin?: 'learned' | 'seed'; categoryId?: string; id?: string } = {}): Promise<RuleInfo[]> {
       return rules
-        .filter((r) => r.userId === userId && (!filter.origin || r.origin === filter.origin) && (!filter.categoryId || r.categoryId === filter.categoryId))
+        .filter(
+          (r) =>
+            r.userId === userId &&
+            (!filter.origin || r.origin === filter.origin) &&
+            (!filter.categoryId || r.categoryId === filter.categoryId) &&
+            (!filter.id || r.id === filter.id),
+        )
         .map((r) => ({
           id: r.id,
           matchType: r.matchType,
