@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import type { CategoryLine, CategoryStatus } from '@/features/budget/summary';
 import { categoryEmoji } from '@/features/categorisation/emoji';
 import { formatRand } from '@/features/transactions/money';
@@ -28,9 +29,9 @@ export function Bar({ pct, status }: { pct: number; status: CategoryStatus }) {
   );
 }
 
-export function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
+export function Stat({ label, value, note, wide }: { label: string; value: string; note?: string; wide?: boolean }) {
   return (
-    <div className={styles.stat}>
+    <div className={cx(styles.stat, wide && styles.statWide)}>
       <div className={styles.statLabel}>{label}</div>
       <div className={styles.statValue}>{value}</div>
       {note && <div className={styles.statNote}>{note}</div>}
@@ -38,45 +39,79 @@ export function Stat({ label, value, note }: { label: string; value: string; not
   );
 }
 
-function cardNote(c: CategoryLine) {
+export function SectionTitle({ children, total }: { children: React.ReactNode; total?: string }) {
+  return (
+    <h2 className={styles.sectionTitle}>
+      <span>{children}</span>
+      {total && <span className={styles.sectionTotal}>{total}</span>}
+    </h2>
+  );
+}
+
+// What the row leads with, mirroring the Discord digest: how much is left, or how far over.
+function rowAmount(c: CategoryLine) {
   switch (c.status) {
-    case 'settled':
-      return c.differenceCents > 0
-        ? `${formatRand(c.differenceCents)} more than budgeted`
-        : c.differenceCents < 0
-          ? `${formatRand(-c.differenceCents)} less than budgeted`
-          : 'Paid in full';
-    case 'pending':
-      return c.spentCents > 0 ? `${formatRand(c.remainingCents)} still to go` : c.isSavings ? 'Not put away yet' : 'Not paid yet';
     case 'over':
-      return `${formatRand(-c.remainingCents)} over`;
+      return formatRand(-c.remainingCents);
+    case 'settled':
     case 'unbudgeted':
-      return 'No budget set';
+      return formatRand(c.spentCents);
     default:
-      return `${formatRand(c.remainingCents)} left`;
+      return formatRand(c.remainingCents);
   }
 }
 
-export function CategoryCard({ c }: { c: CategoryLine }) {
+function rowNote(c: CategoryLine) {
+  const of = c.allocatedCents > 0 ? ` of ${formatRand(c.allocatedCents)}` : '';
+  switch (c.status) {
+    case 'over':
+      return `over${of}`;
+    case 'settled':
+      return c.differenceCents > 0
+        ? `paid, ${formatRand(c.differenceCents)} above`
+        : c.differenceCents < 0
+          ? `paid, ${formatRand(-c.differenceCents)} below`
+          : 'paid in full';
+    case 'pending':
+      return c.spentCents > 0 ? `to go${of}` : c.isSavings ? 'not put away yet' : `not paid yet${of}`;
+    case 'unbudgeted':
+      return c.isSavings ? 'saved · no budget' : 'spent · no budget';
+    default:
+      return `left${of}`;
+  }
+}
+
+// One budget, as one line: emoji, name, how far through it is, and what's left. The whole row is
+// a link to that category's transactions for the cycle, so a number can always be chased down.
+export function CategoryRow({ c, cycleId, note }: { c: CategoryLine; cycleId: string; note?: React.ReactNode }) {
+  const pct = c.usedPct ?? (c.spentCents > 0 ? 100 : 0);
   return (
-    <div className={cx(styles.card, styles.toned, styles[c.status])}>
-      <div className={styles.cardHead}>
-        <span className={styles.cardName} title={c.name}>
-          <span className={styles.emoji} aria-hidden>
-            {categoryEmoji(c.emoji)}
-          </span>
-          {c.name}
-        </span>
-        <StatusChip status={c.status} />
-      </div>
-      <Bar pct={c.usedPct ?? (c.spentCents > 0 ? 100 : 0)} status={c.status} />
-      <div className={styles.amounts}>
-        <span>
-          {formatRand(c.spentCents)}
-          {c.allocatedCents > 0 && <span className={styles.subtle}> of {formatRand(c.allocatedCents)}</span>}
-        </span>
-        <span className={styles.subtle}>{cardNote(c)}</span>
-      </div>
+    <Link
+      href={`/dashboard/transactions?cycle=${cycleId}&category=${c.categoryId}`}
+      className={cx(styles.row, styles.toned, styles[c.status])}
+      aria-label={`${c.name}: ${rowAmount(c)} ${rowNote(c)}`}
+    >
+      <span className={styles.rowEmoji} aria-hidden>
+        {categoryEmoji(c.emoji)}
+      </span>
+      <span className={styles.rowMain}>
+        <span className={styles.rowName}>{c.name}</span>
+        {c.allocatedCents > 0 && <Bar pct={pct} status={c.status} />}
+      </span>
+      <span className={styles.rowRight}>
+        <span className={styles.rowAmount}>{rowAmount(c)}</span>
+        <span className={styles.rowNote}>{note ?? rowNote(c)}</span>
+      </span>
+    </Link>
+  );
+}
+
+export function CategoryRows({ lines, cycleId }: { lines: CategoryLine[]; cycleId: string }) {
+  return (
+    <div className={styles.rows}>
+      {lines.map((c) => (
+        <CategoryRow key={c.categoryId} c={c} cycleId={cycleId} />
+      ))}
     </div>
   );
 }

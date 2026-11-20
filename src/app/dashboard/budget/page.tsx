@@ -28,14 +28,13 @@ export default async function Budget() {
 
       <div className={styles.panel} style={{ padding: 0 }}>
         <div className={cx(styles.budgetRow, styles.budgetHead)}>
-          <span>Emoji</span>
-          <span>Category</span>
-          <span>Per cycle</span>
-          <span>Type</span>
-          <span>Day</span>
-          <span>Savings</span>
-          <span>Active</span>
-          <span />
+          <span className={styles.budgetEmoji}>Emoji</span>
+          <span className={styles.budgetName}>Category</span>
+          <span className={styles.budgetAlloc}>Per cycle</span>
+          <span className={styles.budgetType}>Type</span>
+          <span className={styles.budgetDay}>Day</span>
+          <span className={styles.budgetFlags}>Savings / active</span>
+          <span className={styles.budgetSave} />
         </div>
         {lines.map((l) => (
           <BudgetRowForm
