@@ -18,16 +18,24 @@ import { Bar, cx, SectionTitle, Stat } from '../ui';
 // moves; this says where it lands. Nothing here changes a cycle's totals.
 export default async function Savings() {
   const { userId } = await requireUser();
-  await budgetRepo.ensureBudgetItems(userId);
-  const [{ current }, versions, categories, accounts, bankAccounts] = await Promise.all([
+  // Two chains, started together so neither waits on the other: the budget versions have to follow
+  // ensureBudgetItems to see a category's new R0 item, and the contributions can only be asked for
+  // once the accounts say which categories fund a pot. Awaiting either in turn, as this used to,
+  // made both a round trip of their own after everything else had already finished.
+  const budgetLines = budgetRepo
+    .ensureBudgetItems(userId)
+    .then(() => budgetRepo.listBudgetLineVersions(userId));
+  const pots = savingsRepo.listSavingsAccounts(userId).then(async (accounts) => {
+    const linked = accounts.map((a) => a.categoryId).filter((id): id is string => id !== null);
+    return { accounts, contributions: await savingsRepo.contributionsByCategory(userId, [...new Set(linked)]) };
+  });
+  const [{ current }, versions, categories, { accounts, contributions }, bankAccounts] = await Promise.all([
     budget.context(userId),
-    budgetRepo.listBudgetLineVersions(userId),
+    budgetLines,
     budgetRepo.listCategories(userId),
-    savingsRepo.listSavingsAccounts(userId),
+    pots,
     accountLabelRepo.listAccounts(userId),
   ]);
-  const linked = accounts.map((a) => a.categoryId).filter((id): id is string => id !== null);
-  const contributions = await savingsRepo.contributionsByCategory(userId, [...new Set(linked)]);
 
   const lines = savingsLines({
     accounts,

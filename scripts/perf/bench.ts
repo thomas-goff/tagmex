@@ -33,7 +33,7 @@ runScript(async () => {
 
     // src/app/dashboard/transactions/page.tsx
     'transactions': async () => {
-      const [summary] = await Promise.all([budget.summary(USER), budgetRepo.listCategories(USER)]);
+      const [summary] = await Promise.all([budget.cycleFor(USER), budgetRepo.listCategories(USER)]);
       return budgetRepo.listTransactions(
         USER,
         { from: summary.cycle.start, to: summary.status.isCurrent && summary.today >= summary.cycle.end ? undefined : summary.cycle.end },
@@ -44,23 +44,27 @@ runScript(async () => {
 
     // src/app/dashboard/budget/page.tsx
     'budget': async () => {
-      await budgetRepo.ensureBudgetItems(USER);
-      const [{ current }, versions] = await Promise.all([budget.context(USER), budgetRepo.listBudgetLineVersions(USER)]);
+      const [{ current }, versions] = await Promise.all([
+        budget.context(USER),
+        budgetRepo.ensureBudgetItems(USER).then(() => budgetRepo.listBudgetLineVersions(USER)),
+      ]);
       return effectiveLines(versions, current.start);
     },
 
     // src/app/dashboard/savings/page.tsx
     'savings': async () => {
-      await budgetRepo.ensureBudgetItems(USER);
-      const [{ current }, versions, categories, accounts, bankAccounts] = await Promise.all([
+      const budgetLines = budgetRepo.ensureBudgetItems(USER).then(() => budgetRepo.listBudgetLineVersions(USER));
+      const pots = savingsRepo.listSavingsAccounts(USER).then(async (accounts) => {
+        const linked = accounts.map((a) => a.categoryId).filter((id): id is string => id !== null);
+        return { accounts, contributions: await savingsRepo.contributionsByCategory(USER, [...new Set(linked)]) };
+      });
+      const [{ current }, versions, categories, { accounts, contributions }, bankAccounts] = await Promise.all([
         budget.context(USER),
-        budgetRepo.listBudgetLineVersions(USER),
+        budgetLines,
         budgetRepo.listCategories(USER),
-        savingsRepo.listSavingsAccounts(USER),
+        pots,
         accountLabelRepo.listAccounts(USER),
       ]);
-      const linked = accounts.map((a) => a.categoryId).filter((id): id is string => id !== null);
-      const contributions = await savingsRepo.contributionsByCategory(USER, [...new Set(linked)]);
       return savingsLines({
         accounts,
         budgetLines: effectiveLines(versions, current.start),

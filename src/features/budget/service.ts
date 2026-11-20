@@ -100,6 +100,17 @@ export function createBudgetService({ repo, now = () => new Date() }: Deps) {
   return {
     context,
 
+    // Which cycle a reference names, and whether it is the current one -- without summarising it.
+    // Callers that only want a date range to filter by (the transactions screen, list_transactions,
+    // recategorising within a cycle) used to call summary() for this, which also runs
+    // ensureBudgetItems, reads every budget version and scans the cycle's whole ledger, then throws
+    // all of it away.
+    async cycleFor(userId: string, cycleRef?: string) {
+      const ctx = await context(userId);
+      const cycle = resolveCycle(ctx, cycleRef);
+      return { cycle, status: cycleStatus(cycle, ctx.today, cycle.id === ctx.current.id), today: ctx.today };
+    },
+
     async summary(userId: string, cycleRef?: string) {
       const ctx = await context(userId);
       const [summary] = await summarise(userId, ctx, [resolveCycle(ctx, cycleRef)]);

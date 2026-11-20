@@ -78,7 +78,7 @@ export class CommandError extends Error {
 }
 
 export interface CommandDeps {
-  budget: Pick<BudgetService, 'summary' | 'context'>;
+  budget: Pick<BudgetService, 'summary' | 'context' | 'cycleFor'>;
   repo: Pick<
     BudgetRepo,
     | 'findTransaction'
@@ -169,7 +169,7 @@ export function createCommands(deps: CommandDeps) {
 
       let range: { from?: string; to?: string } = {};
       if (input.cycleRef) {
-        const { cycle, status } = await deps.budget.summary(userId, input.cycleRef);
+        const { cycle, status } = await deps.budget.cycleFor(userId, input.cycleRef);
         // The current cycle stays open past its projected end while the salary is late.
         range = { from: cycle.start, to: status.isCurrent ? undefined : cycle.end };
       }
@@ -431,14 +431,15 @@ export function createCommands(deps: CommandDeps) {
       if (patch.expectedSalaryCents === 0) {
         throw new CommandError('zero_salary', 'The expected salary must be more than R0.');
       }
-      await deps.repo.updateSettings(userId, patch);
-      const [settings, { cycle }] = await Promise.all([deps.repo.getSettings(userId), deps.budget.summary(userId)]);
-      return { settings, cycle };
+      // context() resolves the current cycle under the new settings and hands back those settings,
+      // so this is one read: the old pair re-read the settings and summarised the whole cycle.
+      const settings = await deps.repo.updateSettings(userId, patch);
+      const { current } = await deps.budget.context(userId);
+      return { settings, cycle: current };
     },
 
     async setNotificationSettings(userId: string, patch: Pick<Partial<Settings>, 'digestEnabled' | 'digestHour' | 'discordAlertsEnabled'>) {
-      await deps.repo.updateSettings(userId, patch);
-      return deps.repo.getSettings(userId);
+      return deps.repo.updateSettings(userId, patch);
     },
 
     // A soft delete: the transaction leaves every total until it's restored. Excluding one that

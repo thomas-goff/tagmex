@@ -182,7 +182,7 @@ const listTransactions = defineTool({
     let from: string | undefined;
     let to: string | undefined;
     if (args.cycle_id) {
-      const { cycle, status } = await deps.budget.summary(userId, args.cycle_id);
+      const { cycle, status } = await deps.budget.cycleFor(userId, args.cycle_id);
       from = cycle.start;
       // The current cycle stays open past its projected end while the salary is late.
       to = status.isCurrent ? undefined : cycle.end;

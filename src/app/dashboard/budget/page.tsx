@@ -13,8 +13,12 @@ import { cx } from '../ui';
 // planning a new split are different things.
 export default async function Budget() {
   const { userId } = await requireUser();
-  await budgetRepo.ensureBudgetItems(userId);
-  const [{ current }, versions] = await Promise.all([budget.context(userId), budgetRepo.listBudgetLineVersions(userId)]);
+  // The versions have to be read after ensureBudgetItems so a category added elsewhere shows its
+  // R0 row, but the cycle does not: starting both together costs one round trip, not two.
+  const [{ current }, versions] = await Promise.all([
+    budget.context(userId),
+    budgetRepo.ensureBudgetItems(userId).then(() => budgetRepo.listBudgetLineVersions(userId)),
+  ]);
   const lines = effectiveLines(versions, current.start);
   const queued = new Map(scheduledChanges(versions, current.start).map((v) => [v.categoryId, v]));
   const total = lines.filter((l) => l.isActive).reduce((sum, l) => sum + l.allocatedCents, 0);

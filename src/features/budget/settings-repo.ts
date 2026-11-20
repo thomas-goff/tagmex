@@ -27,19 +27,25 @@ export function createSettingsRepo(db: Database) {
       return { ...rest, expectedSalaryCents: expectedSalaryAmount === null ? null : decimalToCents(expectedSalaryAmount) };
     },
 
-    async updateSettings(userId: string, patch: Partial<Settings>) {
-      await db.insert(userSettings).values({ userId }).onConflictDoNothing();
+    // One upsert that returns the settings as they now stand: the row is created with the column
+    // defaults if it is the user's first change, and whatever the patch leaves out keeps its value.
+    // Callers used to follow this with getSettings, which was two more round trips for a row the
+    // write already had.
+    async updateSettings(userId: string, patch: Partial<Settings>): Promise<Settings> {
       const { expectedSalaryCents, ...rest } = patch;
-      await db
-        .update(userSettings)
-        .set({
-          ...rest,
-          ...(expectedSalaryCents === undefined
-            ? {}
-            : { expectedSalaryAmount: expectedSalaryCents === null ? null : centsToDecimal(expectedSalaryCents) }),
-          updatedAt: new Date(),
-        })
-        .where(eq(userSettings.userId, userId));
+      const changes = {
+        ...rest,
+        ...(expectedSalaryCents === undefined
+          ? {}
+          : { expectedSalaryAmount: expectedSalaryCents === null ? null : centsToDecimal(expectedSalaryCents) }),
+      };
+      const [row] = await db
+        .insert(userSettings)
+        .values({ userId, ...changes })
+        .onConflictDoUpdate({ target: userSettings.userId, set: { ...changes, updatedAt: new Date() } })
+        .returning(columns);
+      const { expectedSalaryAmount, ...saved } = row!;
+      return { ...saved, expectedSalaryCents: expectedSalaryAmount === null ? null : decimalToCents(expectedSalaryAmount) };
     },
   };
 }

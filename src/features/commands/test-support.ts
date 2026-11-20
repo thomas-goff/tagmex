@@ -210,8 +210,10 @@ export function fakeWorld({ now = () => new Date(`${TODAY}T10:00:00Z`) }: { now?
     async getSettings(userId: string) {
       return settings.get(userId) ?? DEFAULT_SETTINGS;
     },
-    async updateSettings(userId: string, patch: Partial<Settings>) {
-      settings.set(userId, { ...(settings.get(userId) ?? DEFAULT_SETTINGS), ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) });
+    async updateSettings(userId: string, patch: Partial<Settings>): Promise<Settings> {
+      const saved = { ...(settings.get(userId) ?? DEFAULT_SETTINGS), ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) };
+      settings.set(userId, saved);
+      return saved;
     },
     async listSalaryCredits(userId: string) {
       return live(userId)
