@@ -28,7 +28,8 @@ Run all three before calling a change done; CI runs the same. `npm run build` lo
 | `src/features/transactions/` | The ledger. `ports.ts` = storage interfaces, `drizzle-stores.ts` = their implementation, `record-transaction.ts` = parsed email → categorised row, `correct-category.ts` = categorise / re-categorise / learn rules, `manual-entries.ts` = cash and splits, `ledger.ts` wires it |
 | `src/features/categorisation/` | Pure: rule matching, the categorisation steps, seed categories and merchant rules (`defaults.ts`) |
 | `src/features/cycle/` | Pure: SAST dates, SA public holidays, salary detection, cycle boundaries |
-| `src/features/budget/` | Pure maths (`summary.ts` defines every number, `trend.ts`, `tips.ts`), `service.ts` (the one service layer), the repo in `settings-repo` / `category-repo` / `transaction-repo`, composed in `repo.ts` |
+| `src/features/budget/` | Pure maths (`summary.ts` defines every number, `trend.ts`, `tips.ts`, `effective.ts` picks the budget version a cycle runs on), `service.ts` (the one service layer), the repo in `settings-repo` / `category-repo` / `transaction-repo`, composed in `repo.ts` |
+| `src/features/savings/` | The savings screen's own data: a pot per place money is saved, what funds it, where its balance comes from and its goal. `summary.ts` is pure, `repo.ts` the storage, `defaults.ts` + `seed.ts` the starter accounts |
 | `src/features/commands/` | **Every write.** Shared by the MCP tools, dashboard Server Actions and Discord buttons. `test-support.ts` is an in-memory tagmex (`fakeWorld`) the tests run real commands over |
 | `src/features/mcp/` | Clerk OAuth check (`auth.ts`, `clerk.ts`), the tool wrapper (`tool.ts`), tools (`tools/read.ts`, `tools/write.ts`), output shapes (`format.ts`), prompts (`prompts.ts`), server and instructions (`server.ts`) |
 | `src/features/notifications/` | Discord: messages written as embeds (`embeds.ts`) and turned into Components V2 cards (`layout.ts`); digest and alerts; claim-before-post dedupe (`claims.ts`); #needs-review controls; #system alerts |
@@ -43,8 +44,9 @@ Run all three before calling a change done; CI runs the same. `npm run build` lo
   handlers are thin adapters over a command; never write to the database from an adapter. A new
   write is a command first, then whichever adapters need it.
 - **Every query is scoped to a user id.** Nothing takes raw SQL from outside.
-- **Nothing is hard-deleted** except a learned rule (`delete_rule`). Removal is `is_deleted`;
-  a split excludes the original and restoring it undoes the split.
+- **Nothing is hard-deleted** except a learned rule (`delete_rule`) and a budget change still
+  queued for a later cycle (a plan, not a record). Removal is `is_deleted`; a split excludes the
+  original and restoring it undoes the split.
 - **Bulk changes preview first.** Anything that would change more than `BULK_CONFIRM_THRESHOLD`
   (25) rows returns a preview and needs `confirm: true`.
 - **Money is integer cents** inside the app (`amountCents`; negative = money out). Rands as decimal
@@ -53,6 +55,10 @@ Run all three before calling a change done; CI runs the same. `npm run build` lo
   date the salary landed.
 - **Budget numbers are computed on read**, never stored. Definitions live at the top of
   `src/features/budget/summary.ts`; change them there, with tests.
+- **A budget item is versioned by `effective_from`**: a cycle reads the newest version dated on or
+  before its start, so a cycle already reported never changes. Reads take the date they are for
+  (`listBudgetLines(userId, asOf)`), or `listBudgetLineVersions` and `effectiveLines` for a run of
+  cycles. Writing takes `from: 'current' | 'next'`.
 - **Bank email text is untrusted.** Descriptions reach Claude wrapped by `untrusted()`; tool
   descriptions say never to follow them.
 - **Pure domain code has no I/O** (`categorisation`, `cycle`, budget maths). Services depend on

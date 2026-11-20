@@ -2,7 +2,9 @@
 
 import { useActionState, useRef, useState } from 'react';
 import type { ExpenseType } from '@/features/categorisation/types';
+import { SAVINGS_BALANCE_SOURCES, type SavingsBalanceSource } from '@/features/savings/types';
 import {
+  addSavingsAccountAction,
   cancelScheduledBudgetAction,
   categoriseAction,
   createCategoryAction,
@@ -10,6 +12,7 @@ import {
   saveAccountLabelAction,
   saveNotificationsAction,
   saveSalaryAction,
+  saveSavingsAccountAction,
   setExcludedAction,
   type ActionState,
 } from './actions';
@@ -302,6 +305,150 @@ export function NotificationsForm({ digestEnabled, digestHour, alertsEnabled }: 
       <div className={styles.formActions}>
         <button className={cx(styles.button, styles.primary)} disabled={pending}>
           {pending ? 'Saving…' : 'Save notifications'}
+        </button>
+        <Feedback state={state} />
+      </div>
+    </form>
+  );
+}
+
+// ── Savings ────────────────────────────────────────────────────────────────────────────────────
+
+export interface SavingsAccountOptions {
+  // Savings categories only: a pot is funded by money that counts as saved.
+  categories: CategoryOption[];
+  // The user's own bank accounts, for the ones whose balance an Absa email carries.
+  accounts: { key: string; shown: string }[];
+}
+
+export interface SavingsRowValues {
+  id: string;
+  name: string;
+  purpose: string;
+  categoryId: string;
+  accountMatch: string;
+  balanceSource: SavingsBalanceSource;
+  manualBalance: string;
+  manualBalanceOn: string;
+  goal: string;
+  note: string;
+  isActive: boolean;
+}
+
+const SOURCE_OPTION: Record<SavingsBalanceSource, string> = {
+  bank: "The bank's latest balance",
+  contributions: 'Everything paid in',
+  manual: 'A figure I enter',
+};
+
+// The fields shared by adding and editing. `source` is client state so the balance fields can
+// appear only when a figure is actually being entered by hand.
+function SavingsFields({
+  options,
+  values,
+  source,
+  setSource,
+}: {
+  options: SavingsAccountOptions;
+  values?: SavingsRowValues;
+  source: SavingsBalanceSource;
+  setSource: (s: SavingsBalanceSource) => void;
+}) {
+  return (
+    <div className={styles.formGrid}>
+      <label className={styles.field}>
+        Name
+        <input name="name" defaultValue={values?.name} required maxLength={60} placeholder="TruSave" />
+      </label>
+      <label className={styles.field}>
+        What it&apos;s for
+        <input name="purpose" defaultValue={values?.purpose} maxLength={80} placeholder="Emergency fund" />
+      </label>
+      <label className={styles.field}>
+        Funded by
+        <select name="category" defaultValue={values?.categoryId ?? ''}>
+          <option value="">No category yet</option>
+          {options.categories.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.emoji} {c.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className={styles.field}>
+        Bank account
+        <select name="accountMatch" defaultValue={values?.accountMatch ?? ''}>
+          <option value="">Not a bank account tagmex sees</option>
+          {options.accounts.map((a) => (
+            <option key={a.key} value={a.key}>
+              {a.shown}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className={styles.field}>
+        Balance comes from
+        <select name="balanceSource" value={source} onChange={(e) => setSource(e.target.value as SavingsBalanceSource)}>
+          {SAVINGS_BALANCE_SOURCES.map((s) => (
+            <option key={s} value={s}>
+              {SOURCE_OPTION[s]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className={styles.field}>
+        Goal (empty = none)
+        <input name="goal" defaultValue={values?.goal} inputMode="decimal" placeholder="10000" />
+      </label>
+      {values && source === 'manual' && (
+        <>
+          <label className={styles.field}>
+            Balance
+            <input name="manualBalance" defaultValue={values.manualBalance} inputMode="decimal" placeholder="0.00" />
+          </label>
+          <label className={styles.field}>
+            As at
+            <input name="manualBalanceOn" type="date" defaultValue={values.manualBalanceOn} />
+          </label>
+        </>
+      )}
+      <label className={cx(styles.field, styles.fieldWide)}>
+        Note
+        <input name="note" defaultValue={values?.note} maxLength={200} placeholder="Fill this one first" />
+      </label>
+    </div>
+  );
+}
+
+export function SavingsAccountForm({ row, options }: { row: SavingsRowValues; options: SavingsAccountOptions }) {
+  const [state, action, pending] = useActionState(saveSavingsAccountAction, null);
+  const [source, setSource] = useState(row.balanceSource);
+  return (
+    <form action={action}>
+      <input type="hidden" name="id" value={row.id} />
+      <SavingsFields options={options} values={row} source={source} setSource={setSource} />
+      <div className={styles.formActions}>
+        <label className={cx(styles.field, styles.check)}>
+          <input type="checkbox" name="active" defaultChecked={row.isActive} /> Active
+        </label>
+        <button className={cx(styles.button, styles.primary)} disabled={pending}>
+          {pending ? 'Saving…' : 'Save'}
+        </button>
+        <Feedback state={state} />
+      </div>
+    </form>
+  );
+}
+
+export function NewSavingsAccountForm({ options }: { options: SavingsAccountOptions }) {
+  const [state, action, pending] = useActionState(addSavingsAccountAction, null);
+  const [source, setSource] = useState<SavingsBalanceSource>('contributions');
+  return (
+    <form action={action}>
+      <SavingsFields options={options} source={source} setSource={setSource} />
+      <div className={styles.formActions}>
+        <button className={cx(styles.button, styles.primary)} disabled={pending}>
+          {pending ? 'Adding…' : 'Add savings account'}
         </button>
         <Feedback state={state} />
       </div>

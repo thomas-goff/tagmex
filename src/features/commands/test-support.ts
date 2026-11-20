@@ -9,6 +9,8 @@ import { ConflictError } from '@/features/budget/repo';
 import { createBudgetService } from '@/features/budget/service';
 import { BUDGET_EPOCH, effectiveLines, versionToExtend } from '@/features/budget/effective';
 import { DEFAULT_SETTINGS, type BudgetLine, type BudgetLineVersion, type Settings } from '@/features/budget/types';
+import type { SavingsAccountPatch } from '@/features/savings/repo';
+import type { SavingsAccount } from '@/features/savings/types';
 import type { CategoryRule, CategorySource, ExpenseType } from '@/features/categorisation/types';
 import { payloadText } from '@/features/notifications/embeds';
 import type { ReviewOutcome, ReviewSuggestion } from '@/features/notifications/review';
@@ -61,6 +63,7 @@ export function fakeWorld({ now = () => new Date(`${TODAY}T10:00:00Z`) }: { now?
   const transactions: FakeTransaction[] = [];
   const categories: FakeCategory[] = [];
   const budgetItems: FakeBudgetItem[] = [];
+  const savingsAccounts: (SavingsAccount & { userId: string })[] = [];
   const rules: (CategoryRule & { userId: string })[] = [];
   const labels: (AccountLabel & { userId: string })[] = [];
   const settings = new Map<string, Settings>();
@@ -415,6 +418,36 @@ export function fakeWorld({ now = () => new Date(`${TODAY}T10:00:00Z`) }: { now?
     },
   } satisfies AccountLabelRepo;
 
+  const savings = {
+    async listSavingsAccounts(userId: string): Promise<SavingsAccount[]> {
+      return savingsAccounts.filter((a) => a.userId === userId).map((a) => ({ ...a }));
+    },
+    async createSavingsAccount(userId: string, input: SavingsAccountPatch & { name: string }) {
+      const account = {
+        userId,
+        id: id(),
+        name: input.name,
+        purpose: input.purpose ?? null,
+        categoryId: input.categoryId ?? null,
+        accountMatch: input.accountMatch ?? null,
+        balanceSource: input.balanceSource ?? 'contributions',
+        manualBalanceCents: input.manualBalanceCents ?? null,
+        manualBalanceOn: input.manualBalanceOn ?? null,
+        goalCents: input.goalCents ?? null,
+        note: input.note ?? null,
+        sortOrder: input.sortOrder ?? savingsAccounts.length,
+        isActive: input.isActive ?? true,
+      };
+      savingsAccounts.push(account);
+      return account.id;
+    },
+    async updateSavingsAccount(userId: string, accountId: string, patch: SavingsAccountPatch) {
+      const a = savingsAccounts.find((x) => x.userId === userId && x.id === accountId);
+      if (a) Object.assign(a, Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)));
+      return Boolean(a);
+    },
+  };
+
   const budget = createBudgetService({ repo, now });
   const review = {
     async resolve(userId: string, ids: string[], outcome: ReviewOutcome) {
@@ -446,15 +479,16 @@ export function fakeWorld({ now = () => new Date(`${TODAY}T10:00:00Z`) }: { now?
     // No rules engine here: a transaction added without a category arrives uncategorised.
     manual: createManualEntries({ stores, unitOfWork, categorise: async () => ({ categoryId: null, source: 'none', ruleId: null }), newRef: id }),
   };
-  const commands = createCommands({ budget, repo, accounts, ledger, review, status, now });
+  const commands = createCommands({ budget, repo, accounts, savings, ledger, review, status, now });
 
   return {
     commands,
     budget,
     repo,
     accounts,
+    savings,
     stores,
-    state: { transactions, categories, budgetItems, rules, labels, reviewed, suggested, posts, statusPosts },
+    state: { transactions, categories, budgetItems, savingsAccounts, rules, labels, reviewed, suggested, posts, statusPosts },
     discord: { down: (down = true) => (discordDown = down) },
 
     // Adds a category (and, for an expense one, its budget item) and returns its id.

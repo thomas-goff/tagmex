@@ -18,6 +18,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { ACCOUNT_LABEL_KINDS } from '@/features/accounts/labels';
 import { TRANSACTION_KINDS } from '@/features/bank-email/types';
+import { SAVINGS_BALANCE_SOURCES } from '@/features/savings/types';
 import { TRANSACTION_SOURCES } from '@/features/transactions/ports';
 import {
   CATEGORY_KINDS,
@@ -321,6 +322,46 @@ export const accountLabels = pgTable(
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (t) => [unique('account_labels_user_kind_match_unique').on(t.userId, t.kind, t.match)],
+).enableRLS();
+
+// Where a savings account's balance comes from. `bank`: the latest Absa email for that account.
+// `contributions`: everything ever moved into its category, which is what a tax-free account's
+// lifetime cap counts. `manual`: a figure typed in, for anything no email carries (EasyEquities)
+// or when no email has arrived yet.
+export const savingsBalanceSource = pgEnum('savings_balance_source', SAVINGS_BALANCE_SOURCES);
+
+// One per place money is saved, which is not the same thing as a savings category: a category is
+// what the budget moves each cycle, this is the pot it lands in, what it is for and what it is
+// being filled to. Nothing here changes a budget or a total; it is the savings screen's own view.
+export const savingsAccounts = pgTable(
+  'savings_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    name: text('name').notNull(),
+    // What it is for, in the user's words ("Emergency fund", "Car / house").
+    purpose: text('purpose'),
+    // The savings category that funds it: its budget is this account's amount per cycle, and its
+    // transactions are the contributions. Null = nothing in the budget points here yet.
+    categoryId: uuid('category_id').references(() => categories.id, { onDelete: 'set null' }),
+    // The bank account it is, keyed as account_labels keys them: type + last 4, e.g. "SAVE1234".
+    accountMatch: text('account_match'),
+    balanceSource: savingsBalanceSource('balance_source').notNull().default('contributions'),
+    manualBalance: money('manual_balance'),
+    manualBalanceOn: date('manual_balance_on'),
+    // What it is being filled to. Null = no target, so no progress bar.
+    goal: money('goal'),
+    note: text('note'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    unique('savings_accounts_user_name_unique').on(t.userId, t.name),
+    index('savings_accounts_user_idx').on(t.userId, t.sortOrder),
+    check('savings_accounts_goal_non_negative', sql`${t.goal} is null or ${t.goal} >= 0`),
+  ],
 ).enableRLS();
 
 // Discord messages that are edited later: a #needs-review post per uncategorised transaction,

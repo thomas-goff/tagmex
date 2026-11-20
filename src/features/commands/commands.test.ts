@@ -198,6 +198,47 @@ describe('categories', () => {
   });
 });
 
+describe('savings accounts', () => {
+  test('a pot records what it is for, what funds it and what it is filled to', async () => {
+    const w = fakeWorld();
+    const tfsa = w.category('Tax Free Savings', { allocatedCents: 3_000_00, isSavings: true });
+
+    const { id } = await w.commands.addSavingsAccount(USER, {
+      name: 'Tax Free Savings',
+      purpose: 'Long term',
+      category: tfsa,
+      goalCents: 500_000_00,
+    });
+
+    const [stored] = await w.savings.listSavingsAccounts(USER);
+    assert.equal(stored!.id, id);
+    assert.deepEqual([stored!.name, stored!.purpose, stored!.categoryId, stored!.goalCents], ['Tax Free Savings', 'Long term', tfsa, 500_000_00]);
+    // Nothing pointed at a bank account, so its balance is what has been paid in.
+    assert.equal(stored!.balanceSource, 'contributions');
+  });
+
+  test('two pots cannot share a name, and an unknown one is refused', async () => {
+    const w = fakeWorld();
+    await w.commands.addSavingsAccount(USER, { name: 'TruSave' });
+
+    await rejects(w.commands.addSavingsAccount(USER, { name: ' trusave ' }), 'name_taken');
+    await rejects(w.commands.addSavingsAccount(USER, { name: '  ' }), 'nothing_to_change');
+    await rejects(w.commands.updateSavingsAccount(USER, '00000000-0000-4000-8000-000000009999', { goalCents: 1 }), 'unknown_savings_account');
+  });
+
+  test('a balance typed in survives switching the source back and forth', async () => {
+    const w = fakeWorld();
+    const { id } = await w.commands.addSavingsAccount(USER, { name: '30 Day Savings', balanceSource: 'manual' });
+
+    await w.commands.updateSavingsAccount(USER, id, { name: '30 Day Savings', manualBalanceCents: 42_610_00, manualBalanceOn: '2026-11-20' });
+    await w.commands.updateSavingsAccount(USER, id, { name: '30 Day Savings', balanceSource: 'contributions' });
+    const back = await w.commands.updateSavingsAccount(USER, id, { name: '30 Day Savings', balanceSource: 'manual' });
+
+    assert.equal(back.manualBalanceCents, 42_610_00);
+    assert.equal(back.manualBalanceOn, '2026-11-20');
+  });
+});
+
 describe('rules', () => {
   test('a learned rule can be forgotten; what it categorised stays; built-in rules stay', async () => {
     const w = fakeWorld();

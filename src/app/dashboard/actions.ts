@@ -10,6 +10,7 @@ import { parseEmoji } from '@/features/categorisation/emoji';
 import { EXPENSE_TYPES } from '@/features/categorisation/types';
 import { commands } from '@/features/commands';
 import { CommandError } from '@/features/commands/commands';
+import { SAVINGS_BALANCE_SOURCES } from '@/features/savings/types';
 import { cleanText } from '@/features/text/clean';
 import { NotFoundError } from '@/features/transactions/correct-category';
 import { parseAmount } from '@/features/transactions/money';
@@ -239,6 +240,78 @@ export async function saveNotificationsAction(_prev: ActionState, form: FormData
       discordAlertsEnabled: input.alertsEnabled,
     });
     return done('Saved');
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+// ── Savings ────────────────────────────────────────────────────────────────────────────────────
+
+const optionalAmount = z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined),
+  z
+    .string()
+    .transform((value, ctx) => {
+      try {
+        return parseAmount(value);
+      } catch {
+        ctx.addIssue({ code: 'custom', message: 'That must be an amount in rands, e.g. 10000 or 10000.50' });
+        return z.NEVER;
+      }
+    })
+    .optional(),
+);
+
+const optionalDate = z.preprocess((v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined), z.iso.date().optional());
+
+const savingsFields = {
+  name: z.string().trim().min(1, 'Give it a name').max(60, 'Names are at most 60 characters'),
+  purpose: optionalText,
+  category: optionalText,
+  accountMatch: optionalText,
+  balanceSource: z.enum(SAVINGS_BALANCE_SOURCES),
+  goal: optionalAmount,
+  note: optionalText,
+};
+
+export async function addSavingsAccountAction(_prev: ActionState, form: FormData): Promise<ActionState> {
+  const { userId } = await requireUser();
+  try {
+    const input = z.object(savingsFields).parse(Object.fromEntries(form));
+    const { name } = await commands.addSavingsAccount(userId, {
+      name: input.name,
+      purpose: input.purpose ?? null,
+      category: input.category ?? null,
+      accountMatch: input.accountMatch ?? null,
+      balanceSource: input.balanceSource,
+      goalCents: input.goal ?? null,
+      note: input.note ?? null,
+    });
+    return done(`Added ${name}`);
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function saveSavingsAccountAction(_prev: ActionState, form: FormData): Promise<ActionState> {
+  const { userId } = await requireUser();
+  try {
+    const input = z
+      .object({ ...savingsFields, id: z.uuid(), manualBalance: optionalAmount, manualBalanceOn: optionalDate, active: checkbox })
+      .parse(Object.fromEntries(form));
+    const account = await commands.updateSavingsAccount(userId, input.id, {
+      name: input.name,
+      purpose: input.purpose ?? null,
+      category: input.category ?? null,
+      accountMatch: input.accountMatch ?? null,
+      balanceSource: input.balanceSource,
+      manualBalanceCents: input.manualBalance ?? null,
+      manualBalanceOn: input.manualBalanceOn ?? null,
+      goalCents: input.goal ?? null,
+      note: input.note ?? null,
+      isActive: input.active,
+    });
+    return done(`Saved ${account.name}`);
   } catch (err) {
     return fail(err);
   }

@@ -10,6 +10,7 @@ export const TABS = [
   { href: '/dashboard', label: 'Overview', icon: 'overview' },
   { href: '/dashboard/transactions', label: 'Transactions', icon: 'transactions' },
   { href: '/dashboard/budget', label: 'Budget', icon: 'budget' },
+  { href: '/dashboard/savings', label: 'Savings', icon: 'savings' },
   { href: '/dashboard/settings', label: 'Settings', icon: 'settings' },
 ] as const;
 
@@ -37,6 +38,13 @@ function Icon({ name }: { name: IconName }) {
       <>
         <circle cx="12" cy="12" r="8" />
         <path d="M12 7v5l3 2" />
+      </>
+    ),
+    savings: (
+      <>
+        <path d="M3.5 10.5h17v7a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z" />
+        <path d="M3.5 10.5 12 5l8.5 5.5" />
+        <circle cx="12" cy="14.5" r="2" />
       </>
     ),
     settings: (

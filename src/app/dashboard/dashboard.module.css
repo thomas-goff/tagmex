@@ -691,6 +691,102 @@
   gap: 6px;
 }
 
+/* ── Savings ──────────────────────────────────────────────────────────────────────────────── */
+
+.savingsList {
+  display: grid;
+  gap: 12px;
+}
+
+.savingsCard {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.savingsHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.savingsName {
+  font-size: 16px;
+  font-weight: 650;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.savingsBalance {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.savingsSub {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* The short facts under the bar: percentage, what's left, what goes in. */
+.savingsFacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.savingsFacts > span:not(:last-child)::after {
+  content: ' ·';
+  color: var(--muted);
+}
+
+.savingsSource,
+.savingsNote {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
+
+.savingsEdit > summary {
+  min-height: var(--tap);
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+}
+
+.savingsEdit > summary::-webkit-details-marker {
+  display: none;
+}
+
+.savingsEdit[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.savingsEdit .formGrid,
+.savingsEdit .formActions {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.fieldWide {
+  grid-column: 1 / -1;
+}
+
 /* ── Budget rows ──────────────────────────────────────────────────────────────────────────── */
 
 .budgetRow {
@@ -974,6 +1070,10 @@
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   }
 
+  .savingsList {
+    grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  }
+
   .filters {
     grid-template-areas:
       'search cat go'
@@ -1073,7 +1173,7 @@
     grid-template-areas:
       'emoji name alloc type day flags from save'
       'queue queue queue queue queue queue queue queue';
-    grid-template-columns: 56px minmax(110px, 1.2fr) 100px 110px 72px 150px 112px auto;
+    grid-template-columns: 52px minmax(100px, 1fr) 100px 112px 68px 196px 120px auto;
     gap: 8px;
     padding: 10px 12px;
     font-size: 14px;

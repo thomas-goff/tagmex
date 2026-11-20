@@ -14,6 +14,8 @@ import type { Settings } from '@/features/budget/types';
 import type { ExpenseType } from '@/features/categorisation/types';
 import { addDays, isIsoDate, todayIn } from '@/features/cycle/dates';
 import type { ReviewMessages } from '@/features/notifications/review';
+import type { SavingsRepo } from '@/features/savings/repo';
+import { SAVINGS_BALANCE_SOURCES, type SavingsBalanceSource } from '@/features/savings/types';
 import type { StatusPoster } from '@/features/notifications/status-post';
 import { findCategory, type CategoryCorrector } from '@/features/transactions/correct-category';
 import { normaliseManualDescription, type ManualEntries } from '@/features/transactions/manual-entries';
@@ -51,6 +53,8 @@ export type CommandErrorCode =
   | 'cannot_merge'
   | 'seed_rule'
   | 'no_scheduled_change'
+  | 'unknown_savings_account'
+  | 'bad_balance_source'
   | 'bad_date'
   | 'bad_amount'
   | 'bad_split'
@@ -97,6 +101,7 @@ export interface CommandDeps {
     | 'setSuggestion'
   >;
   accounts: Pick<AccountLabelRepo, 'listAccounts' | 'listLabels' | 'countDescriptionMatches' | 'setLabel' | 'removeLabel'>;
+  savings: Pick<SavingsRepo, 'listSavingsAccounts' | 'createSavingsAccount' | 'updateSavingsAccount'>;
   ledger: {
     stores: { transactions: Pick<TransactionStore, 'findMatching' | 'listSplitParts'> };
     corrector: Pick<CategoryCorrector, 'findSimilar' | 'correct' | 'recategorise'>;
@@ -342,6 +347,83 @@ export function createCommands(deps: CommandDeps) {
       }
       await deps.repo.deleteRule(userId, rule.id);
       return rule;
+    },
+
+    // ── Savings ──────────────────────────────────────────────────────────────────────────────
+    // A savings account is the pot, not the budget: it records what the money is for, where its
+    // balance comes from and what it is being filled to. None of it changes a cycle's totals.
+
+    async addSavingsAccount(
+      userId: string,
+      input: {
+        name: string;
+        purpose?: string | null;
+        category?: string | null;
+        accountMatch?: string | null;
+        balanceSource?: SavingsBalanceSource;
+        goalCents?: number | null;
+        note?: string | null;
+      },
+    ) {
+      const name = input.name.trim();
+      if (name === '') throw new CommandError('nothing_to_change', 'Give the account a name.');
+      const existing = await deps.savings.listSavingsAccounts(userId);
+      if (existing.some((a) => a.name.toLowerCase() === name.toLowerCase())) {
+        throw new CommandError('name_taken', `There is already a savings account called "${name}".`);
+      }
+      const categoryId = input.category ? (await category(userId, input.category, { archived: true })).id : null;
+      const id = await deps.savings.createSavingsAccount(userId, {
+        name,
+        purpose: input.purpose ?? null,
+        categoryId,
+        accountMatch: input.accountMatch ?? null,
+        balanceSource: input.balanceSource ?? (input.accountMatch ? 'bank' : 'contributions'),
+        goalCents: input.goalCents ?? null,
+        note: input.note ?? null,
+        sortOrder: existing.length,
+      });
+      return { id, name };
+    },
+
+    // Only what's passed changes. A balance typed in is kept whatever the source is set to, so
+    // switching back and forth doesn't lose it.
+    async updateSavingsAccount(
+      userId: string,
+      id: string,
+      patch: {
+        name?: string;
+        purpose?: string | null;
+        category?: string | null;
+        accountMatch?: string | null;
+        balanceSource?: SavingsBalanceSource;
+        manualBalanceCents?: number | null;
+        manualBalanceOn?: string | null;
+        goalCents?: number | null;
+        note?: string | null;
+        isActive?: boolean;
+      },
+    ) {
+      const accounts = await deps.savings.listSavingsAccounts(userId);
+      const target = accounts.find((a) => a.id === id);
+      if (!target) throw new CommandError('unknown_savings_account', 'No savings account with that id.');
+      if (patch.balanceSource && !SAVINGS_BALANCE_SOURCES.includes(patch.balanceSource)) {
+        throw new CommandError('bad_balance_source', `A balance comes from one of: ${SAVINGS_BALANCE_SOURCES.join(', ')}.`);
+      }
+      if (patch.name !== undefined) {
+        const name = patch.name.trim();
+        if (name === '') throw new CommandError('nothing_to_change', 'Give the account a name.');
+        if (accounts.some((a) => a.id !== id && a.name.toLowerCase() === name.toLowerCase())) {
+          throw new CommandError('name_taken', `There is already a savings account called "${name}".`);
+        }
+      }
+      const { category: ref, ...rest } = patch;
+      const categoryId = ref === undefined ? undefined : ref ? (await category(userId, ref, { archived: true })).id : null;
+      await deps.savings.updateSavingsAccount(userId, id, {
+        ...rest,
+        ...(patch.name === undefined ? {} : { name: patch.name.trim() }),
+        ...(categoryId === undefined ? {} : { categoryId }),
+      });
+      return (await deps.savings.listSavingsAccounts(userId)).find((a) => a.id === id)!;
     },
 
     async setSalaryConfig(userId: string, patch: Pick<Partial<Settings>, 'salaryDayHint' | 'expectedSalaryCents' | 'salaryTolerancePct'>) {
