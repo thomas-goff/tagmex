@@ -17,9 +17,10 @@ export function createSettingsRepo(db: Database) {
   };
 
   return {
-    // Creates the row with defaults on first read.
+    // Read only: no row yet means nothing has been changed from the defaults, which is exactly what
+    // DEFAULT_SETTINGS is. The row is created by the first updateSettings, so this stays off the
+    // write path -- every page load used to insert here before reading.
     async getSettings(userId: string): Promise<Settings> {
-      await db.insert(userSettings).values({ userId }).onConflictDoNothing();
       const [row] = await db.select(columns).from(userSettings).where(eq(userSettings.userId, userId));
       if (!row) return DEFAULT_SETTINGS;
       const { expectedSalaryAmount, ...rest } = row;

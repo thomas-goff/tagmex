@@ -6,7 +6,6 @@ import { budgetItems, categories, categoryRules, transactions } from '@/db/schem
 import type { CategoryKind, ExpenseType, RuleDirection, RuleMatchType, RuleOrigin } from '@/features/categorisation/types';
 import { centsToDecimal, decimalToCents } from '@/features/transactions/money';
 import { effectiveLines, versionToExtend } from './effective';
-import { missingBudgetItems } from './ensure-items';
 import type { BudgetLine, BudgetLineVersion } from './types';
 
 export class ConflictError extends Error {
@@ -196,21 +195,24 @@ export function createCategoryRepo(db: Database) {
     },
 
     // Creates the R0 item any expense category is missing. Safe to call on every read.
+    // One statement: the two reads and the insert this used to make were three round trips on every
+    // dashboard page load, and the usual answer is that nothing is missing. An expense category
+    // with no budget item at all gets the R0 row; `not exists` means a category that already has
+    // any version is left alone, and nothing is written when they all do.
     async ensureBudgetItems(userId: string) {
-      const [expense, items] = await Promise.all([
-        db
-          .select({ id: categories.id, expenseType: categories.expenseType, sortOrder: categories.sortOrder })
-          .from(categories)
-          .where(and(eq(categories.userId, userId), eq(categories.kind, 'expense'))),
-        db.select({ categoryId: budgetItems.categoryId }).from(budgetItems).where(eq(budgetItems.userId, userId)),
-      ]);
-      const missing = missingBudgetItems(expense, new Set(items.map((i) => i.categoryId)));
-      if (missing.length === 0) return 0;
-      const inserted = await db
-        .insert(budgetItems)
-        .values(missing.map((m) => ({ userId, ...m })))
-        .onConflictDoNothing()
-        .returning({ id: budgetItems.id });
+      const inserted = await db.execute(sql`
+        insert into ${budgetItems} ("user_id", "category_id", "expense_type", "sort_order")
+        select ${userId}, ${categories.id}, coalesce(${categories.expenseType}, 'dynamic'), ${categories.sortOrder}
+        from ${categories}
+        where ${categories.userId} = ${userId}
+          and ${categories.kind} = 'expense'
+          and not exists (
+            select 1 from ${budgetItems}
+            where ${budgetItems.userId} = ${userId} and ${budgetItems.categoryId} = ${categories.id}
+          )
+        on conflict do nothing
+        returning ${budgetItems.id}
+      `);
       return inserted.length;
     },
 
