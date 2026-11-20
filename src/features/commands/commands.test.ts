@@ -61,6 +61,64 @@ describe('recategorise', () => {
   });
 });
 
+describe('when a budget change takes effect', () => {
+  // The cycle running on TODAY (2026-11-13) opened with the 30 October salary.
+  function world() {
+    const w = fakeWorld();
+    const salary = w.category('Salary', { kind: 'income', isSalary: true });
+    w.transaction('SALARY', 30_713_54, { categoryId: salary, occurredOn: '2026-10-30' });
+    return w;
+  }
+
+  test("'next' leaves the cycle being reported alone; 'current' changes it", async () => {
+    const w = world();
+    const tfsa = w.category('TFSA', { allocatedCents: 2_000_00, isSavings: true });
+
+    const before = await w.budget.summary(USER);
+    const queued = await w.commands.setBudgetItem(USER, tfsa, { allocatedCents: 3_000_00 }, 'next');
+    assert.equal(queued.appliesFrom, 'next');
+
+    const unchanged = await w.budget.summary(USER);
+    assert.equal(unchanged.allocatedCents, before.allocatedCents);
+    assert.equal(unchanged.categories.find((c) => c.categoryId === tfsa)!.allocatedCents, 2_000_00);
+
+    // And it is visible as queued rather than silently lost.
+    const scheduled = await w.commands.listScheduledBudgetChanges(USER);
+    assert.deepEqual(
+      scheduled.map((v) => [v.categoryName, v.allocatedCents]),
+      [['TFSA', 3_000_00]],
+    );
+
+    await w.commands.setBudgetItem(USER, tfsa, { allocatedCents: 3_000_00 }, 'current');
+    const now = await w.budget.summary(USER);
+    assert.equal(now.categories.find((c) => c.categoryId === tfsa)!.allocatedCents, 3_000_00);
+    assert.equal(now.allocatedCents, before.allocatedCents + 1_000_00);
+  });
+
+  test('a cycle already finished keeps the figures it was reported with', async () => {
+    const w = world();
+    const fuel = w.category('Fuel', { allocatedCents: 1_000_00 });
+    const octoberBefore = (await w.budget.summary(USER, '2026-10-15')).allocatedCents;
+
+    await w.commands.setBudgetItem(USER, fuel, { allocatedCents: 5_000_00 }, 'current');
+
+    assert.equal((await w.budget.summary(USER, '2026-10-15')).allocatedCents, octoberBefore);
+    assert.equal((await w.budget.summary(USER)).categories.find((c) => c.categoryId === fuel)!.allocatedCents, 5_000_00);
+  });
+
+  test('a queued change can be dropped, but one in force cannot', async () => {
+    const w = world();
+    const ra = w.category('RA', { allocatedCents: 500_00 });
+
+    const queued = await w.commands.setBudgetItem(USER, ra, { allocatedCents: 1_000_00 }, 'next');
+    await w.commands.cancelScheduledBudgetChange(USER, ra, queued.effectiveFrom);
+    assert.deepEqual(await w.commands.listScheduledBudgetChanges(USER), []);
+
+    const inForce = await w.commands.setBudgetItem(USER, ra, { allocatedCents: 900_00 }, 'current');
+    await rejects(w.commands.cancelScheduledBudgetChange(USER, ra, inForce.effectiveFrom), 'no_scheduled_change');
+  });
+});
+
 describe('categories', () => {
   test('rename, archive and savings change only what is passed', async () => {
     const w = fakeWorld();
@@ -77,8 +135,11 @@ describe('categories', () => {
 
     await w.commands.updateCategory(USER, id, { archived: true });
     assert.equal(w.state.categories.find((c) => c.id === id)!.isArchived, true);
-    // Its budget is switched off with it.
-    assert.equal(w.state.budgetItems.find((b) => b.categoryId === id)!.isActive, false);
+    // Its budget is switched off with it, from this cycle on: the versions behind it stand, so
+    // the cycles it was already reported in keep their figures.
+    const versions = w.state.budgetItems.filter((b) => b.categoryId === id).sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
+    assert.equal(versions.at(-1)!.isActive, false);
+    assert.equal(versions[0]!.isActive, true);
   });
 
   test('nothing new can be filed under an archived category, and built-in ones stay', async () => {

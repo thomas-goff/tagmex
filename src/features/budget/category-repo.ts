@@ -1,12 +1,13 @@
 // Categories, their budget items and the rules that point at them. Every query is scoped by the
 // userId argument; allocations become integer cents here.
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, sql } from 'drizzle-orm';
 import type { Database } from '@/db/client';
 import { budgetItems, categories, categoryRules, transactions } from '@/db/schema';
 import type { CategoryKind, ExpenseType, RuleDirection, RuleMatchType, RuleOrigin } from '@/features/categorisation/types';
 import { centsToDecimal, decimalToCents } from '@/features/transactions/money';
+import { effectiveLines, versionToExtend } from './effective';
 import { missingBudgetItems } from './ensure-items';
-import type { BudgetLine } from './types';
+import type { BudgetLine, BudgetLineVersion } from './types';
 
 export class ConflictError extends Error {
   constructor(message: string) {
@@ -54,6 +55,29 @@ function isUniqueViolation(err: unknown) {
 }
 
 export function createCategoryRepo(db: Database) {
+  // Every version of every budget item, oldest column order kept so callers can resolve a cycle's
+  // figures in memory: summarising a run of cycles reads this once.
+  async function listBudgetLineVersions(userId: string): Promise<BudgetLineVersion[]> {
+    const rows = await db
+      .select({
+        categoryId: budgetItems.categoryId,
+        categoryName: categories.name,
+        categoryEmoji: categories.emoji,
+        effectiveFrom: budgetItems.effectiveFrom,
+        expenseType: budgetItems.expenseType,
+        allocated: budgetItems.allocated,
+        expectedDay: budgetItems.expectedDay,
+        isActive: budgetItems.isActive,
+        sortOrder: budgetItems.sortOrder,
+        isSavings: categories.isSavings,
+      })
+      .from(budgetItems)
+      .innerJoin(categories, eq(categories.id, budgetItems.categoryId))
+      .where(and(eq(budgetItems.userId, userId), eq(categories.kind, 'expense')))
+      .orderBy(asc(budgetItems.sortOrder), asc(categories.name));
+    return rows.map(({ allocated, ...r }) => ({ ...r, allocatedCents: decimalToCents(allocated) }));
+  }
+
   return {
     // Archived ones included: callers that offer a choice filter them out.
     async listCategories(userId: string): Promise<CategoryInfo[]> {
@@ -190,42 +214,75 @@ export function createCategoryRepo(db: Database) {
       return inserted.length;
     },
 
-    async listBudgetLines(userId: string): Promise<BudgetLine[]> {
-      const rows = await db
-        .select({
-          categoryId: budgetItems.categoryId,
-          categoryName: categories.name,
-          categoryEmoji: categories.emoji,
-          expenseType: budgetItems.expenseType,
-          allocated: budgetItems.allocated,
-          expectedDay: budgetItems.expectedDay,
-          isActive: budgetItems.isActive,
-          sortOrder: budgetItems.sortOrder,
-          isSavings: categories.isSavings,
-        })
-        .from(budgetItems)
-        .innerJoin(categories, eq(categories.id, budgetItems.categoryId))
-        .where(and(eq(budgetItems.userId, userId), eq(categories.kind, 'expense')))
-        .orderBy(asc(budgetItems.sortOrder), asc(categories.name));
-      return rows.map(({ allocated, ...r }) => ({ ...r, allocatedCents: decimalToCents(allocated) }));
+    // Every version of every budget item. Callers that want one cycle's figures run these through
+    // effectiveLines; summarising a run of cycles reads them once and resolves each cycle in memory.
+    listBudgetLineVersions,
+
+    // The figures in force on `asOf`, which is a cycle's start date (or today, outside a cycle).
+    async listBudgetLines(userId: string, asOf: string): Promise<BudgetLine[]> {
+      return effectiveLines(await listBudgetLineVersions(userId), asOf);
     },
 
+    // Writes the version effective from `effectiveFrom`, carrying forward whatever the patch leaves
+    // out from the version in force then. Dating it past the current cycle's start is what "from
+    // next cycle" means: the cycle being reported now keeps the figures it already had.
     async updateBudgetItem(
       userId: string,
       categoryId: string,
       patch: { allocatedCents?: number; expenseType?: ExpenseType; expectedDay?: number | null; isActive?: boolean },
+      effectiveFrom: string,
     ) {
-      const { allocatedCents, ...rest } = patch;
-      const updated = await db
-        .update(budgetItems)
-        .set({
-          ...rest,
-          ...(allocatedCents === undefined ? {} : { allocated: centsToDecimal(allocatedCents) }),
-          updatedAt: new Date(),
+      const base = versionToExtend(await listBudgetLineVersions(userId), categoryId, effectiveFrom);
+      if (!base) return false;
+      const merged = {
+        expenseType: patch.expenseType ?? base.expenseType,
+        allocatedCents: patch.allocatedCents ?? base.allocatedCents,
+        expectedDay: patch.expectedDay === undefined ? base.expectedDay : patch.expectedDay,
+        isActive: patch.isActive ?? base.isActive,
+      };
+      const written = await db
+        .insert(budgetItems)
+        .values({
+          userId,
+          categoryId,
+          effectiveFrom,
+          expenseType: merged.expenseType,
+          allocated: centsToDecimal(merged.allocatedCents),
+          expectedDay: merged.expectedDay,
+          isActive: merged.isActive,
+          sortOrder: base.sortOrder,
         })
-        .where(and(eq(budgetItems.userId, userId), eq(budgetItems.categoryId, categoryId)))
+        .onConflictDoUpdate({
+          target: [budgetItems.userId, budgetItems.categoryId, budgetItems.effectiveFrom],
+          set: {
+            expenseType: merged.expenseType,
+            allocated: centsToDecimal(merged.allocatedCents),
+            expectedDay: merged.expectedDay,
+            isActive: merged.isActive,
+            updatedAt: new Date(),
+          },
+        })
         .returning({ id: budgetItems.id });
-      return updated.length > 0;
+      return written.length > 0;
+    },
+
+    // Drops a version that has not taken effect yet. The one exception to nothing being deleted:
+    // a queued change is a plan, not a record, and there is nothing else to undo it with. A date
+    // already in force is refused by the `after` guard the caller passes.
+    async deleteScheduledBudgetItem(userId: string, categoryId: string, effectiveFrom: string, after: string) {
+      if (effectiveFrom <= after) return false;
+      const removed = await db
+        .delete(budgetItems)
+        .where(
+          and(
+            eq(budgetItems.userId, userId),
+            eq(budgetItems.categoryId, categoryId),
+            eq(budgetItems.effectiveFrom, effectiveFrom),
+            gt(budgetItems.effectiveFrom, after),
+          ),
+        )
+        .returning({ id: budgetItems.id });
+      return removed.length > 0;
     },
 
     // Rules with the category each points at, newest first. `origin` narrows to learned or seed.

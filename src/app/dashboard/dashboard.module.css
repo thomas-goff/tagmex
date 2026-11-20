@@ -699,7 +699,9 @@
     'emoji name  name'
     'alloc alloc type'
     'day   day   day'
-    'flags flags save';
+    'from  from  from'
+    'flags flags save'
+    'queue queue queue';
   grid-template-columns: 56px 1fr 1fr;
   gap: 8px 10px;
   align-items: center;
@@ -762,11 +764,39 @@
   gap: 16px;
   align-items: center;
 }
+.budgetFrom { grid-area: from; }
+
 .budgetSave {
   grid-area: save;
   display: flex;
   gap: 10px;
   align-items: center;
+}
+
+/* A change that hasn't taken effect yet, under the row that will take it. */
+.budgetQueued {
+  grid-area: queue;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+/* A destructive-ish action that shouldn't look like a primary button. */
+.linkButton {
+  font: inherit;
+  font-size: 13px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .budgetSave .button {
@@ -1040,8 +1070,10 @@
   /* Budget rows back to a table-like grid, with the header row carrying the labels. */
   .budgetRow,
   .budgetHead {
-    grid-template-areas: 'emoji name alloc type day flags save';
-    grid-template-columns: 64px minmax(120px, 1.3fr) 110px 120px 84px 160px auto;
+    grid-template-areas:
+      'emoji name alloc type day flags from save'
+      'queue queue queue queue queue queue queue queue';
+    grid-template-columns: 56px minmax(110px, 1.2fr) 100px 110px 72px 150px 112px auto;
     gap: 8px;
     padding: 10px 12px;
     font-size: 14px;
@@ -1063,6 +1095,10 @@
 
   .budgetFlags {
     gap: 12px;
+  }
+
+  .budgetHead .budgetQueued {
+    display: none;
   }
 
   .budgetFlags .check {

@@ -7,11 +7,12 @@ import {
   type AccountLabelKind,
 } from '@/features/accounts/labels';
 import type { AccountLabelRepo } from '@/features/accounts/repo';
+import { BUDGET_EPOCH, scheduledChanges } from '@/features/budget/effective';
 import type { BudgetRepo, CategoryInfo } from '@/features/budget/repo';
 import type { BudgetService } from '@/features/budget/service';
 import type { Settings } from '@/features/budget/types';
 import type { ExpenseType } from '@/features/categorisation/types';
-import { isIsoDate, todayIn } from '@/features/cycle/dates';
+import { addDays, isIsoDate, todayIn } from '@/features/cycle/dates';
 import type { ReviewMessages } from '@/features/notifications/review';
 import type { StatusPoster } from '@/features/notifications/status-post';
 import { findCategory, type CategoryCorrector } from '@/features/transactions/correct-category';
@@ -49,6 +50,7 @@ export type CommandErrorCode =
   | 'name_taken'
   | 'cannot_merge'
   | 'seed_rule'
+  | 'no_scheduled_change'
   | 'bad_date'
   | 'bad_amount'
   | 'bad_split'
@@ -57,6 +59,9 @@ export type CommandErrorCode =
   | 'nothing_to_post'
   | 'post_limit'
   | 'post_failed';
+
+// Which cycle a budget change starts in: the one being reported now, or the next one.
+export type BudgetChangeFrom = 'current' | 'next';
 
 export class CommandError extends Error {
   constructor(
@@ -69,7 +74,7 @@ export class CommandError extends Error {
 }
 
 export interface CommandDeps {
-  budget: Pick<BudgetService, 'summary'>;
+  budget: Pick<BudgetService, 'summary' | 'context'>;
   repo: Pick<
     BudgetRepo,
     | 'findTransaction'
@@ -81,7 +86,9 @@ export interface CommandDeps {
     | 'categoryUsage'
     | 'ensureBudgetItems'
     | 'updateBudgetItem'
+    | 'deleteScheduledBudgetItem'
     | 'listBudgetLines'
+    | 'listBudgetLineVersions'
     | 'listRules'
     | 'deleteRule'
     | 'updateSettings'
@@ -210,7 +217,7 @@ export function createCommands(deps: CommandDeps) {
         isSavings: input.isSavings,
       });
       await deps.repo.ensureBudgetItems(userId);
-      if (input.allocatedCents !== undefined) await deps.repo.updateBudgetItem(userId, id, { allocatedCents: input.allocatedCents });
+      if (input.allocatedCents !== undefined) await deps.repo.updateBudgetItem(userId, id, { allocatedCents: input.allocatedCents }, BUDGET_EPOCH);
       return { id };
     },
 
@@ -246,7 +253,9 @@ export function createCommands(deps: CommandDeps) {
         ...(patch.archived === undefined ? {} : { isArchived: patch.archived }),
         ...(patch.savings === undefined ? {} : { isSavings: patch.savings }),
       });
-      if (patch.archived && target.kind === 'expense') await deps.repo.updateBudgetItem(userId, target.id, { isActive: false });
+      if (patch.archived && target.kind === 'expense') {
+        await deps.repo.updateBudgetItem(userId, target.id, { isActive: false }, (await deps.budget.context(userId)).current.start);
+      }
       const updated: CategoryInfo = {
         ...target,
         name: name ?? target.name,
@@ -274,16 +283,21 @@ export function createCommands(deps: CommandDeps) {
       if (!input.confirm) {
         return { status: 'needs_confirmation' as const, from, into, ...(await deps.repo.categoryUsage(userId, from.id)) };
       }
-      const budgetCents = (await deps.repo.listBudgetLines(userId)).find((l) => l.categoryId === from.id && l.isActive)?.allocatedCents ?? 0;
+      const asOf = (await deps.budget.context(userId)).current.start;
+      const budgetCents = (await deps.repo.listBudgetLines(userId, asOf)).find((l) => l.categoryId === from.id && l.isActive)?.allocatedCents ?? 0;
       const moved = await deps.repo.mergeCategory(userId, from.id, into.id);
       return { status: 'done' as const, from, into, ...moved, droppedBudgetCents: budgetCents };
     },
 
-    // Only what's passed changes.
+    // Only what's passed changes. `from` says which cycle it starts in: 'current' rewrites the
+    // cycle being reported now (what a correction wants), 'next' leaves it alone and applies to
+    // whichever cycle follows, even if salary lands early or late. Cycles already finished keep
+    // the figures they were reported with either way.
     async setBudgetItem(
       userId: string,
       ref: string,
       patch: { allocatedCents?: number; expenseType?: ExpenseType; expectedDay?: number | null; isActive?: boolean },
+      from: BudgetChangeFrom = 'current',
     ) {
       if (Object.values(patch).every((v) => v === undefined)) {
         throw new CommandError('nothing_to_change', 'Nothing to change.');
@@ -293,8 +307,29 @@ export function createCommands(deps: CommandDeps) {
         throw new CommandError('not_expense', `${target.name} is a ${target.kind} category; only expense categories have a budget.`);
       }
       await deps.repo.ensureBudgetItems(userId);
-      await deps.repo.updateBudgetItem(userId, target.id, patch);
-      return (await deps.repo.listBudgetLines(userId)).find((l) => l.categoryId === target.id)!;
+      const { current } = await deps.budget.context(userId);
+      const effectiveFrom = from === 'next' ? addDays(current.start, 1) : current.start;
+      await deps.repo.updateBudgetItem(userId, target.id, patch, effectiveFrom);
+      const line = (await deps.repo.listBudgetLines(userId, effectiveFrom)).find((l) => l.categoryId === target.id)!;
+      return { ...line, effectiveFrom, appliesFrom: from, cycle: current };
+    },
+
+    // Queued budget changes that have not taken effect, soonest first.
+    async listScheduledBudgetChanges(userId: string) {
+      const { current } = await deps.budget.context(userId);
+      return scheduledChanges(await deps.repo.listBudgetLineVersions(userId), current.start);
+    },
+
+    // Drops a queued change. Only a date still in the future: once a change is in force it is part
+    // of what a cycle was reported with, so it is superseded, never removed.
+    async cancelScheduledBudgetChange(userId: string, ref: string, effectiveFrom: string) {
+      const target = await category(userId, ref);
+      const { current } = await deps.budget.context(userId);
+      const dropped = await deps.repo.deleteScheduledBudgetItem(userId, target.id, effectiveFrom, current.start);
+      if (!dropped) {
+        throw new CommandError('no_scheduled_change', `${target.name} has no change queued for ${effectiveFrom}.`);
+      }
+      return { category: target, effectiveFrom };
     },
 
     // Forgets a learned rule. What it already categorised stays as it is; future emails with that

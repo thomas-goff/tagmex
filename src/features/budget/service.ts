@@ -7,6 +7,7 @@ import {
   type SalaryCredit,
 } from '@/features/cycle/cycle';
 import { addDays, isIsoDate, todayIn } from '@/features/cycle/dates';
+import { effectiveLines } from './effective';
 import type { BudgetRepo } from './repo';
 import { summariseCycle, type CycleSummary } from './summary';
 import { deriveTips } from './tips';
@@ -28,7 +29,7 @@ export const MAX_TREND_CYCLES = 12;
 interface Deps {
   repo: Pick<
     BudgetRepo,
-    'getSettings' | 'listSalaryCredits' | 'listLedgerRows' | 'listBudgetLines' | 'ensureBudgetItems' | 'firstTransactionDate'
+    'getSettings' | 'listSalaryCredits' | 'listLedgerRows' | 'listBudgetLineVersions' | 'ensureBudgetItems' | 'firstTransactionDate'
   >;
   now?: () => Date;
 }
@@ -75,7 +76,7 @@ export function createBudgetService({ repo, now = () => new Date() }: Deps) {
     const rowsEnd = (c: Cycle) => (c.id === ctx.current.id && addDays(ctx.today, 1) > c.end ? addDays(ctx.today, 1) : c.end);
     const from = cycles.reduce((min, c) => (c.start < min ? c.start : min), cycles[0]!.start);
     const to = cycles.reduce((max, c) => (rowsEnd(c) > max ? rowsEnd(c) : max), rowsEnd(cycles[0]!));
-    const [rows, lines] = await Promise.all([repo.listLedgerRows(userId, from, to), repo.listBudgetLines(userId)]);
+    const [rows, versions] = await Promise.all([repo.listLedgerRows(userId, from, to), repo.listBudgetLineVersions(userId)]);
 
     return cycles.map((cycle) => {
       const end = rowsEnd(cycle);
@@ -84,7 +85,9 @@ export function createBudgetService({ repo, now = () => new Date() }: Deps) {
         status: cycleStatus(cycle, ctx.today, cycle.id === ctx.current.id),
         today: ctx.today,
         rows: rows.filter((r) => r.occurredOn >= cycle.start && r.occurredOn < end),
-        lines,
+        // Each cycle reads the budget as it stood when it started, so editing a budget now never
+        // rewrites a cycle already reported.
+        lines: effectiveLines(versions, cycle.start),
         hasFullData: ctx.trackedFrom !== null && cycle.start >= ctx.trackedFrom,
       });
     });

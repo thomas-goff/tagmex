@@ -7,7 +7,8 @@ import type { TransactionKind } from '@/features/bank-email/types';
 import type { BudgetRepo, CategoryInfo, RuleInfo, TransactionView } from '@/features/budget/repo';
 import { ConflictError } from '@/features/budget/repo';
 import { createBudgetService } from '@/features/budget/service';
-import { DEFAULT_SETTINGS, type BudgetLine, type Settings } from '@/features/budget/types';
+import { BUDGET_EPOCH, effectiveLines, versionToExtend } from '@/features/budget/effective';
+import { DEFAULT_SETTINGS, type BudgetLine, type BudgetLineVersion, type Settings } from '@/features/budget/types';
 import type { CategoryRule, CategorySource, ExpenseType } from '@/features/categorisation/types';
 import { payloadText } from '@/features/notifications/embeds';
 import type { ReviewOutcome, ReviewSuggestion } from '@/features/notifications/review';
@@ -46,7 +47,7 @@ interface FakeCategory extends Omit<CategoryInfo, 'hasBudgetItem'> {
   expenseType: ExpenseType | null;
 }
 
-interface FakeBudgetItem extends Omit<BudgetLine, 'categoryName' | 'categoryEmoji' | 'isSavings'> {
+interface FakeBudgetItem extends Omit<BudgetLineVersion, 'categoryName' | 'categoryEmoji' | 'isSavings'> {
   userId: string;
 }
 
@@ -290,22 +291,69 @@ export function fakeWorld({ now = () => new Date(`${TODAY}T10:00:00Z`) }: { now?
     },
     async ensureBudgetItems(userId: string) {
       const missing = categories.filter((c) => c.userId === userId && c.kind === 'expense' && !budgetItems.some((b) => b.categoryId === c.id));
-      missing.forEach((c, i) => budgetItems.push({ userId, categoryId: c.id, expenseType: c.expenseType ?? 'dynamic', allocatedCents: 0, expectedDay: null, isActive: true, sortOrder: budgetItems.length + i }));
+      missing.forEach((c, i) =>
+        budgetItems.push({
+          userId,
+          categoryId: c.id,
+          effectiveFrom: BUDGET_EPOCH,
+          expenseType: c.expenseType ?? 'dynamic',
+          allocatedCents: 0,
+          expectedDay: null,
+          isActive: true,
+          sortOrder: budgetItems.length + i,
+        }),
+      );
       return missing.length;
     },
-    async listBudgetLines(userId: string): Promise<BudgetLine[]> {
+    async listBudgetLineVersions(userId: string): Promise<BudgetLineVersion[]> {
       return budgetItems
         .filter((b) => b.userId === userId)
         .map((b) => {
           const c = categoryOf(b.categoryId)!;
-          const { categoryId, expenseType, allocatedCents, expectedDay, isActive, sortOrder } = b;
-          return { categoryId, expenseType, allocatedCents, expectedDay, isActive, sortOrder, categoryName: c.name, categoryEmoji: c.emoji, isSavings: c.isSavings };
+          const { categoryId, effectiveFrom, expenseType, allocatedCents, expectedDay, isActive, sortOrder } = b;
+          return {
+            categoryId,
+            effectiveFrom,
+            expenseType,
+            allocatedCents,
+            expectedDay,
+            isActive,
+            sortOrder,
+            categoryName: c.name,
+            categoryEmoji: c.emoji,
+            isSavings: c.isSavings,
+          };
         });
     },
-    async updateBudgetItem(userId: string, categoryId: string, patch: Partial<Pick<BudgetLine, 'allocatedCents' | 'expenseType' | 'expectedDay' | 'isActive'>>) {
-      const b = budgetItems.find((x) => x.userId === userId && x.categoryId === categoryId);
-      if (b) Object.assign(b, Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)));
-      return Boolean(b);
+    async listBudgetLines(userId: string, asOf: string): Promise<BudgetLine[]> {
+      return effectiveLines(await repo.listBudgetLineVersions(userId), asOf);
+    },
+    async updateBudgetItem(
+      userId: string,
+      categoryId: string,
+      patch: Partial<Pick<BudgetLine, 'allocatedCents' | 'expenseType' | 'expectedDay' | 'isActive'>>,
+      effectiveFrom: string,
+    ) {
+      const base = versionToExtend(await repo.listBudgetLineVersions(userId), categoryId, effectiveFrom);
+      if (!base) return false;
+      const existing = budgetItems.find((x) => x.userId === userId && x.categoryId === categoryId && x.effectiveFrom === effectiveFrom);
+      const merged = {
+        expenseType: base.expenseType,
+        allocatedCents: base.allocatedCents,
+        expectedDay: base.expectedDay,
+        isActive: base.isActive,
+        ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)),
+      };
+      if (existing) Object.assign(existing, merged);
+      else budgetItems.push({ userId, categoryId, effectiveFrom, sortOrder: base.sortOrder, ...merged });
+      return true;
+    },
+    async deleteScheduledBudgetItem(userId: string, categoryId: string, effectiveFrom: string, after: string) {
+      if (effectiveFrom <= after) return false;
+      const i = budgetItems.findIndex((x) => x.userId === userId && x.categoryId === categoryId && x.effectiveFrom === effectiveFrom);
+      if (i === -1) return false;
+      budgetItems.splice(i, 1);
+      return true;
     },
     async listRules(userId: string, filter: { origin?: 'learned' | 'seed'; categoryId?: string } = {}): Promise<RuleInfo[]> {
       return rules
@@ -415,7 +463,18 @@ export function fakeWorld({ now = () => new Date(`${TODAY}T10:00:00Z`) }: { now?
       const c: FakeCategory = { id: id(), userId, name, emoji: null, kind: 'expense', expenseType: 'dynamic', isSystem: false, isSalary: false, isSavings: false, isArchived: false, ...rest };
       if (c.kind !== 'expense') c.expenseType = null;
       categories.push(c);
-      if (c.kind === 'expense') budgetItems.push({ userId, categoryId: c.id, expenseType: c.expenseType ?? 'dynamic', allocatedCents, expectedDay, isActive: true, sortOrder: budgetItems.length });
+      if (c.kind === 'expense') {
+        budgetItems.push({
+          userId,
+          categoryId: c.id,
+          effectiveFrom: BUDGET_EPOCH,
+          expenseType: c.expenseType ?? 'dynamic',
+          allocatedCents,
+          expectedDay,
+          isActive: true,
+          sortOrder: budgetItems.length,
+        });
+      }
       return c.id;
     },
 

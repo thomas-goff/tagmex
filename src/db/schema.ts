@@ -208,8 +208,14 @@ export const appUsers = pgTable('app_users', {
   linkedAt: timestamptz('linked_at'),
 }).enableRLS();
 
-// One per expense category (created at R0 on read by ensureBudgetItems). The source of truth for
-// the category's expense type. `allocated` is per salary cycle.
+// One row per expense category per effective date (created at R0 on read by ensureBudgetItems).
+// The source of truth for the category's expense type. `allocated` is per salary cycle.
+//
+// A category has a row per version of its budget, not just one row: `effective_from` is the first
+// cycle start the figures apply to, and a cycle reads the newest row dated on or before its start.
+// So changing a budget no longer rewrites cycles already reported, and a change made "from next
+// cycle" is simply a row dated past the current cycle's start. Every row that predates the column
+// carries the epoch, which is how a cycle still finds its figures when nothing was ever scheduled.
 export const budgetItems = pgTable(
   'budget_items',
   {
@@ -218,6 +224,7 @@ export const budgetItems = pgTable(
     categoryId: uuid('category_id')
       .notNull()
       .references(() => categories.id, { onDelete: 'cascade' }),
+    effectiveFrom: date('effective_from').notNull().default('1970-01-01'),
     expenseType: expenseType('expense_type').notNull(),
     allocated: money('allocated').notNull().default('0'),
     // Static items: the day of the month the debit order normally runs.
@@ -228,7 +235,8 @@ export const budgetItems = pgTable(
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (t) => [
-    unique('budget_items_user_category_unique').on(t.userId, t.categoryId),
+    unique('budget_items_user_category_effective_unique').on(t.userId, t.categoryId, t.effectiveFrom),
+    index('budget_items_user_category_idx').on(t.userId, t.categoryId, t.effectiveFrom),
     check('budget_items_allocated_non_negative', sql`${t.allocated} >= 0`),
     check('budget_items_expected_day_range', sql`${t.expectedDay} between 1 and 31`),
   ],

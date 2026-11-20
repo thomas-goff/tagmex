@@ -3,6 +3,7 @@
 import { useActionState, useRef, useState } from 'react';
 import type { ExpenseType } from '@/features/categorisation/types';
 import {
+  cancelScheduledBudgetAction,
   categoriseAction,
   createCategoryAction,
   saveBudgetItemAction,
@@ -93,6 +94,23 @@ export interface BudgetRowValues {
   expectedDay: number | null;
   isSavings: boolean;
   isActive: boolean;
+  // A change already queued for a later cycle, if there is one: what it sets and from when.
+  scheduled: { effectiveFrom: string; label: string; allocated: string } | null;
+}
+
+// Drops a queued change that hasn't taken effect.
+function CancelScheduled({ categoryId, effectiveFrom }: { categoryId: string; effectiveFrom: string }) {
+  const [state, action, pending] = useActionState(cancelScheduledBudgetAction, null);
+  return (
+    <form action={action} className={styles.inlineForm}>
+      <input type="hidden" name="categoryId" value={categoryId} />
+      <input type="hidden" name="effectiveFrom" value={effectiveFrom} />
+      <button className={cx(styles.linkButton)} disabled={pending}>
+        {pending ? 'Dropping…' : 'Drop it'}
+      </button>
+      {state && !state.ok && <Feedback state={state} />}
+    </form>
+  );
 }
 
 // One category's budget. A stack of labelled fields on a phone; the same fields line up under the
@@ -136,12 +154,25 @@ export function BudgetRowForm({ row }: { row: BudgetRowValues }) {
           <input type="checkbox" name="active" defaultChecked={row.isActive} /> Active
         </label>
       </span>
+      <label className={styles.budgetFrom}>
+        <span className={styles.fieldLabel}>Apply from</span>
+        <select name="from" defaultValue="current" aria-label={`${row.name}: which cycle the change starts in`}>
+          <option value="current">This cycle</option>
+          <option value="next">Next cycle</option>
+        </select>
+      </label>
       <span className={styles.budgetSave}>
         <button className={cx(styles.button, styles.small)} disabled={pending}>
           {pending ? 'Saving…' : 'Save'}
         </button>
         <Feedback state={state} />
       </span>
+      {row.scheduled && (
+        <span className={styles.budgetQueued}>
+          Queued: <strong>{row.scheduled.allocated}</strong> from {row.scheduled.label}.{' '}
+          <CancelScheduled categoryId={row.categoryId} effectiveFrom={row.scheduled.effectiveFrom} />
+        </span>
+      )}
     </form>
   );
 }

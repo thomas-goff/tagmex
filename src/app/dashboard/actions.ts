@@ -111,6 +111,9 @@ const budgetItemInput = z.object({
   active: checkbox,
   savings: checkbox,
   emoji,
+  // Which cycle the new figures start in. The emoji and the savings flag are properties of the
+  // category rather than of a cycle's budget, so they always apply at once.
+  from: z.enum(['current', 'next']).default('current'),
 });
 
 export async function saveBudgetItemAction(_prev: ActionState, form: FormData): Promise<ActionState> {
@@ -119,13 +122,29 @@ export async function saveBudgetItemAction(_prev: ActionState, form: FormData): 
     const input = budgetItemInput.parse(Object.fromEntries(form));
     await commands.setCategoryEmoji(userId, input.categoryId, input.emoji);
     await commands.updateCategory(userId, input.categoryId, { savings: input.savings });
-    const line = await commands.setBudgetItem(userId, input.categoryId, {
-      allocatedCents: input.allocated,
-      expenseType: input.expenseType,
-      expectedDay: input.expenseType === 'static' ? (input.expectedDay ?? null) : null,
-      isActive: input.active,
-    });
-    return done(`Saved ${line.categoryName}`);
+    const line = await commands.setBudgetItem(
+      userId,
+      input.categoryId,
+      {
+        allocatedCents: input.allocated,
+        expenseType: input.expenseType,
+        expectedDay: input.expenseType === 'static' ? (input.expectedDay ?? null) : null,
+        isActive: input.active,
+      },
+      input.from,
+    );
+    return done(input.from === 'next' ? `Saved ${line.categoryName}, from next cycle` : `Saved ${line.categoryName}`);
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function cancelScheduledBudgetAction(_prev: ActionState, form: FormData): Promise<ActionState> {
+  const { userId } = await requireUser();
+  try {
+    const input = z.object({ categoryId: z.uuid(), effectiveFrom: z.iso.date() }).parse(Object.fromEntries(form));
+    const { category } = await commands.cancelScheduledBudgetChange(userId, input.categoryId, input.effectiveFrom);
+    return done(`Dropped the queued change to ${category.name}`);
   } catch (err) {
     return fail(err);
   }
