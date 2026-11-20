@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { BUDGET_EPOCH } from './effective';
 import { createBudgetService } from './service';
 import { DEFAULT_SETTINGS, type BudgetLine, type LedgerRow } from './types';
 
@@ -21,7 +22,7 @@ function service(firstTransactionOn: string | null = '2026-10-08') {
       listSalaryCredits: async () => [{ transactionId: 's', occurredOn: '2026-10-30', amountCents: 30_000_00 }],
       firstTransactionDate: async () => firstTransactionOn,
       ensureBudgetItems: async () => 0,
-      listBudgetLines: async () => lines,
+      listBudgetLineVersions: async () => lines.map((l) => ({ ...l, effectiveFrom: BUDGET_EPOCH })),
       listLedgerRows: async (_userId, from, to) => rows.filter((r) => r.occurredOn >= from && r.occurredOn < to),
     },
   });

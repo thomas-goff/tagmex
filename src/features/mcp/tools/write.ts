@@ -205,6 +205,7 @@ const setBudgetItem = defineTool({
   title: 'Set a budget item',
   description: [
     'Changes an expense category\'s budget: its allocation per cycle, its type (static, dynamic, irregular), the day of the month its debit order runs (static only; null to clear), or whether it\'s active. Pass only what changes.',
+    'from: current (the default) applies the change to the cycle in progress, so it counts against what has already gone out in it; next leaves the cycle in progress as it is and applies from the following one. Use next when the money has already moved under the old budget and only the plan from here on is changing. Cycles that have finished always keep the budget they were reported with.',
     CYCLE_NOTE,
     MONEY_NOTE,
   ].join(' '),
@@ -214,6 +215,7 @@ const setBudgetItem = defineTool({
     expense_type: z.enum(EXPENSE_TYPES).optional(),
     expected_day: z.number().int().min(1).max(31).nullable().optional(),
     active: z.boolean().optional(),
+    from: z.enum(['current', 'next']).default('current').describe('Which cycle the change starts in.'),
   }),
   output: z.object({
     currency: currencySchema,
@@ -223,17 +225,26 @@ const setBudgetItem = defineTool({
     allocated: z.string(),
     expected_day: z.number().nullable(),
     active: z.boolean(),
+    applies_from: z.enum(['current', 'next']),
+    // The first cycle start the new figures apply to (YYYY-MM-DD).
+    effective_from: z.string(),
   }),
   annotations: { ...write, idempotentHint: true, title: 'Set a budget item' },
   async run(args, ctx) {
-    const line = await ctx.deps.commands.setBudgetItem(ctx.principal.userId, args.category, {
-      allocatedCents: args.allocated === undefined ? undefined : amountOrThrow(args.allocated, 'allocated'),
-      expenseType: args.expense_type,
-      expectedDay: args.expected_day,
-      isActive: args.active,
-    });
+    const line = await ctx.deps.commands.setBudgetItem(
+      ctx.principal.userId,
+      args.category,
+      {
+        allocatedCents: args.allocated === undefined ? undefined : amountOrThrow(args.allocated, 'allocated'),
+        expenseType: args.expense_type,
+        expectedDay: args.expected_day,
+        isActive: args.active,
+      },
+      args.from,
+    );
+    const when = line.appliesFrom === 'next' ? ' From the next cycle; the one in progress is unchanged.' : '';
     return {
-      text: `${line.categoryName}: ${rand(line.allocatedCents)} per cycle, ${line.expenseType}${line.expectedDay ? `, debit order on day ${line.expectedDay}` : ''}${line.isActive ? '' : ', inactive'}.`,
+      text: `${line.categoryName}: ${rand(line.allocatedCents)} per cycle, ${line.expenseType}${line.expectedDay ? `, debit order on day ${line.expectedDay}` : ''}${line.isActive ? '' : ', inactive'}.${when}`,
       data: {
         currency: CURRENCY,
         category_id: line.categoryId,
@@ -242,6 +253,8 @@ const setBudgetItem = defineTool({
         allocated: money(line.allocatedCents),
         expected_day: line.expectedDay,
         active: line.isActive,
+        applies_from: line.appliesFrom,
+        effective_from: line.effectiveFrom,
       },
     };
   },

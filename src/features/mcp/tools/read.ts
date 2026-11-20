@@ -445,7 +445,8 @@ const getBudgetItems = defineTool({
   annotations: { ...readOnly, title: 'Budget items' },
   async run(_args, { principal, deps }) {
     await deps.repo.ensureBudgetItems(principal.userId);
-    const lines = await deps.repo.listBudgetLines(principal.userId);
+    const { current } = await deps.budget.context(principal.userId);
+    const lines = await deps.repo.listBudgetLines(principal.userId, current.start);
     const total = lines.filter((l) => l.isActive).reduce((sum, l) => sum + l.allocatedCents, 0);
     return {
       text: `Budget ${rand(total)} per cycle: ${lines

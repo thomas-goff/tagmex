@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import Link, { useLinkStatus } from 'next/link';
 import { usePathname } from 'next/navigation';
 import styles from './dashboard.module.css';
 
@@ -10,6 +10,7 @@ export const TABS = [
   { href: '/dashboard', label: 'Overview', icon: 'overview' },
   { href: '/dashboard/transactions', label: 'Transactions', icon: 'transactions' },
   { href: '/dashboard/budget', label: 'Budget', icon: 'budget' },
+  { href: '/dashboard/savings', label: 'Savings', icon: 'savings' },
   { href: '/dashboard/settings', label: 'Settings', icon: 'settings' },
 ] as const;
 
@@ -39,6 +40,13 @@ function Icon({ name }: { name: IconName }) {
         <path d="M12 7v5l3 2" />
       </>
     ),
+    savings: (
+      <>
+        <path d="M3.5 10.5h17v7a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z" />
+        <path d="M3.5 10.5 12 5l8.5 5.5" />
+        <circle cx="12" cy="14.5" r="2" />
+      </>
+    ),
     settings: (
       <>
         <circle cx="12" cy="12" r="3" />
@@ -57,6 +65,17 @@ function isActive(pathname: string, href: string) {
   return href === '/dashboard' ? pathname === href : pathname.startsWith(href);
 }
 
+// Inside the Link, so useLinkStatus can report that this tab's navigation is in flight.
+function TabBody({ icon, label }: { icon: IconName; label: string }) {
+  const { pending } = useLinkStatus();
+  return (
+    <span className={styles.tabBody} data-pending={pending}>
+      <Icon name={icon} />
+      <span>{label}</span>
+    </span>
+  );
+}
+
 export function TabBar() {
   const pathname = usePathname();
   return (
@@ -65,8 +84,7 @@ export function TabBar() {
         const active = isActive(pathname, tab.href);
         return (
           <Link key={tab.href} href={tab.href} className={styles.tab} data-active={active} aria-current={active ? 'page' : undefined}>
-            <Icon name={tab.icon} />
-            <span>{tab.label}</span>
+            <TabBody icon={tab.icon} label={tab.label} />
           </Link>
         );
       })}

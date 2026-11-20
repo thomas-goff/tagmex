@@ -71,6 +71,20 @@
   padding: 16px var(--gutter) calc(var(--tabbar) + var(--safe-bottom) + 28px);
 }
 
+/* Placeholder blocks in loading.tsx. The shimmer is dropped for reduced motion by globals.css. */
+.skeleton {
+  display: block;
+  border-radius: 7px;
+  background: linear-gradient(90deg, var(--track) 25%, var(--surface-2) 50%, var(--track) 75%);
+  background-size: 300% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -150% 0; }
+}
+
 /* ── Bottom tab bar ───────────────────────────────────────────────────────────────────────── */
 
 .tabbar {
@@ -104,9 +118,20 @@
   text-decoration: none;
 }
 
-.tab[data-active='true'] {
+.tab[data-active='true'],
+.tabBody[data-pending='true'] {
   color: var(--accent);
   font-weight: 600;
+}
+
+/* Wraps the icon and label so a pending tap can recolour both. */
+.tabBody {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  color: inherit;
+  font: inherit;
 }
 
 .tab:active {
@@ -118,7 +143,8 @@
   height: 24px;
 }
 
-.tab[data-active='true'] .tabIcon {
+.tab[data-active='true'] .tabIcon,
+.tabBody[data-pending='true'] .tabIcon {
   stroke-width: 2.2;
 }
 
@@ -665,6 +691,102 @@
   gap: 6px;
 }
 
+/* ── Savings ──────────────────────────────────────────────────────────────────────────────── */
+
+.savingsList {
+  display: grid;
+  gap: 12px;
+}
+
+.savingsCard {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.savingsHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.savingsName {
+  font-size: 16px;
+  font-weight: 650;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.savingsBalance {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.savingsSub {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* The short facts under the bar: percentage, what's left, what goes in. */
+.savingsFacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.savingsFacts > span:not(:last-child)::after {
+  content: ' ·';
+  color: var(--muted);
+}
+
+.savingsSource,
+.savingsNote {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
+
+.savingsEdit > summary {
+  min-height: var(--tap);
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+}
+
+.savingsEdit > summary::-webkit-details-marker {
+  display: none;
+}
+
+.savingsEdit[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.savingsEdit .formGrid,
+.savingsEdit .formActions {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.fieldWide {
+  grid-column: 1 / -1;
+}
+
 /* ── Budget rows ──────────────────────────────────────────────────────────────────────────── */
 
 .budgetRow {
@@ -673,7 +795,9 @@
     'emoji name  name'
     'alloc alloc type'
     'day   day   day'
-    'flags flags save';
+    'from  from  from'
+    'flags flags save'
+    'queue queue queue';
   grid-template-columns: 56px 1fr 1fr;
   gap: 8px 10px;
   align-items: center;
@@ -736,11 +860,39 @@
   gap: 16px;
   align-items: center;
 }
+.budgetFrom { grid-area: from; }
+
 .budgetSave {
   grid-area: save;
   display: flex;
   gap: 10px;
   align-items: center;
+}
+
+/* A change that hasn't taken effect yet, under the row that will take it. */
+.budgetQueued {
+  grid-area: queue;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+/* A destructive-ish action that shouldn't look like a primary button. */
+.linkButton {
+  font: inherit;
+  font-size: 13px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .budgetSave .button {
@@ -918,6 +1070,10 @@
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   }
 
+  .savingsList {
+    grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  }
+
   .filters {
     grid-template-areas:
       'search cat go'
@@ -1014,8 +1170,10 @@
   /* Budget rows back to a table-like grid, with the header row carrying the labels. */
   .budgetRow,
   .budgetHead {
-    grid-template-areas: 'emoji name alloc type day flags save';
-    grid-template-columns: 64px minmax(120px, 1.3fr) 110px 120px 84px 160px auto;
+    grid-template-areas:
+      'emoji name alloc type day flags from save'
+      'queue queue queue queue queue queue queue queue';
+    grid-template-columns: 52px minmax(100px, 1fr) 100px 112px 68px 196px 120px auto;
     gap: 8px;
     padding: 10px 12px;
     font-size: 14px;
@@ -1037,6 +1195,10 @@
 
   .budgetFlags {
     gap: 12px;
+  }
+
+  .budgetHead .budgetQueued {
+    display: none;
   }
 
   .budgetFlags .check {

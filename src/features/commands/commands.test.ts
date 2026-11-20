@@ -61,6 +61,64 @@ describe('recategorise', () => {
   });
 });
 
+describe('when a budget change takes effect', () => {
+  // The cycle running on TODAY (2026-11-13) opened with the 30 October salary.
+  function world() {
+    const w = fakeWorld();
+    const salary = w.category('Salary', { kind: 'income', isSalary: true });
+    w.transaction('SALARY', 30_713_54, { categoryId: salary, occurredOn: '2026-10-30' });
+    return w;
+  }
+
+  test("'next' leaves the cycle being reported alone; 'current' changes it", async () => {
+    const w = world();
+    const tfsa = w.category('TFSA', { allocatedCents: 2_000_00, isSavings: true });
+
+    const before = await w.budget.summary(USER);
+    const queued = await w.commands.setBudgetItem(USER, tfsa, { allocatedCents: 3_000_00 }, 'next');
+    assert.equal(queued.appliesFrom, 'next');
+
+    const unchanged = await w.budget.summary(USER);
+    assert.equal(unchanged.allocatedCents, before.allocatedCents);
+    assert.equal(unchanged.categories.find((c) => c.categoryId === tfsa)!.allocatedCents, 2_000_00);
+
+    // And it is visible as queued rather than silently lost.
+    const scheduled = await w.commands.listScheduledBudgetChanges(USER);
+    assert.deepEqual(
+      scheduled.map((v) => [v.categoryName, v.allocatedCents]),
+      [['TFSA', 3_000_00]],
+    );
+
+    await w.commands.setBudgetItem(USER, tfsa, { allocatedCents: 3_000_00 }, 'current');
+    const now = await w.budget.summary(USER);
+    assert.equal(now.categories.find((c) => c.categoryId === tfsa)!.allocatedCents, 3_000_00);
+    assert.equal(now.allocatedCents, before.allocatedCents + 1_000_00);
+  });
+
+  test('a cycle already finished keeps the figures it was reported with', async () => {
+    const w = world();
+    const fuel = w.category('Fuel', { allocatedCents: 1_000_00 });
+    const octoberBefore = (await w.budget.summary(USER, '2026-10-15')).allocatedCents;
+
+    await w.commands.setBudgetItem(USER, fuel, { allocatedCents: 5_000_00 }, 'current');
+
+    assert.equal((await w.budget.summary(USER, '2026-10-15')).allocatedCents, octoberBefore);
+    assert.equal((await w.budget.summary(USER)).categories.find((c) => c.categoryId === fuel)!.allocatedCents, 5_000_00);
+  });
+
+  test('a queued change can be dropped, but one in force cannot', async () => {
+    const w = world();
+    const ra = w.category('RA', { allocatedCents: 500_00 });
+
+    const queued = await w.commands.setBudgetItem(USER, ra, { allocatedCents: 1_000_00 }, 'next');
+    await w.commands.cancelScheduledBudgetChange(USER, ra, queued.effectiveFrom);
+    assert.deepEqual(await w.commands.listScheduledBudgetChanges(USER), []);
+
+    const inForce = await w.commands.setBudgetItem(USER, ra, { allocatedCents: 900_00 }, 'current');
+    await rejects(w.commands.cancelScheduledBudgetChange(USER, ra, inForce.effectiveFrom), 'no_scheduled_change');
+  });
+});
+
 describe('categories', () => {
   test('rename, archive and savings change only what is passed', async () => {
     const w = fakeWorld();
@@ -77,8 +135,11 @@ describe('categories', () => {
 
     await w.commands.updateCategory(USER, id, { archived: true });
     assert.equal(w.state.categories.find((c) => c.id === id)!.isArchived, true);
-    // Its budget is switched off with it.
-    assert.equal(w.state.budgetItems.find((b) => b.categoryId === id)!.isActive, false);
+    // Its budget is switched off with it, from this cycle on: the versions behind it stand, so
+    // the cycles it was already reported in keep their figures.
+    const versions = w.state.budgetItems.filter((b) => b.categoryId === id).sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
+    assert.equal(versions.at(-1)!.isActive, false);
+    assert.equal(versions[0]!.isActive, true);
   });
 
   test('nothing new can be filed under an archived category, and built-in ones stay', async () => {
@@ -134,6 +195,47 @@ describe('categories', () => {
     await rejects(merge('Salary', 'Income'), 'cannot_merge');
     await rejects(merge('Transfer', 'Groceries'), 'system_category');
     assert.ok(w.state.categories.every((c) => !c.isArchived));
+  });
+});
+
+describe('savings accounts', () => {
+  test('a pot records what it is for, what funds it and what it is filled to', async () => {
+    const w = fakeWorld();
+    const tfsa = w.category('Tax Free Savings', { allocatedCents: 3_000_00, isSavings: true });
+
+    const { id } = await w.commands.addSavingsAccount(USER, {
+      name: 'Tax Free Savings',
+      purpose: 'Long term',
+      category: tfsa,
+      goalCents: 500_000_00,
+    });
+
+    const [stored] = await w.savings.listSavingsAccounts(USER);
+    assert.equal(stored!.id, id);
+    assert.deepEqual([stored!.name, stored!.purpose, stored!.categoryId, stored!.goalCents], ['Tax Free Savings', 'Long term', tfsa, 500_000_00]);
+    // Nothing pointed at a bank account, so its balance is what has been paid in.
+    assert.equal(stored!.balanceSource, 'contributions');
+  });
+
+  test('two pots cannot share a name, and an unknown one is refused', async () => {
+    const w = fakeWorld();
+    await w.commands.addSavingsAccount(USER, { name: 'TruSave' });
+
+    await rejects(w.commands.addSavingsAccount(USER, { name: ' trusave ' }), 'name_taken');
+    await rejects(w.commands.addSavingsAccount(USER, { name: '  ' }), 'nothing_to_change');
+    await rejects(w.commands.updateSavingsAccount(USER, '00000000-0000-4000-8000-000000009999', { goalCents: 1 }), 'unknown_savings_account');
+  });
+
+  test('a balance typed in survives switching the source back and forth', async () => {
+    const w = fakeWorld();
+    const { id } = await w.commands.addSavingsAccount(USER, { name: '30 Day Savings', balanceSource: 'manual' });
+
+    await w.commands.updateSavingsAccount(USER, id, { name: '30 Day Savings', manualBalanceCents: 42_610_00, manualBalanceOn: '2026-11-20' });
+    await w.commands.updateSavingsAccount(USER, id, { name: '30 Day Savings', balanceSource: 'contributions' });
+    const back = await w.commands.updateSavingsAccount(USER, id, { name: '30 Day Savings', balanceSource: 'manual' });
+
+    assert.equal(back.manualBalanceCents, 42_610_00);
+    assert.equal(back.manualBalanceOn, '2026-11-20');
   });
 });
 

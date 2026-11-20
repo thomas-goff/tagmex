@@ -7,12 +7,15 @@ import {
   type AccountLabelKind,
 } from '@/features/accounts/labels';
 import type { AccountLabelRepo } from '@/features/accounts/repo';
+import { BUDGET_EPOCH, scheduledChanges } from '@/features/budget/effective';
 import type { BudgetRepo, CategoryInfo } from '@/features/budget/repo';
 import type { BudgetService } from '@/features/budget/service';
 import type { Settings } from '@/features/budget/types';
 import type { ExpenseType } from '@/features/categorisation/types';
-import { isIsoDate, todayIn } from '@/features/cycle/dates';
+import { addDays, isIsoDate, todayIn } from '@/features/cycle/dates';
 import type { ReviewMessages } from '@/features/notifications/review';
+import type { SavingsRepo } from '@/features/savings/repo';
+import { SAVINGS_BALANCE_SOURCES, type SavingsBalanceSource } from '@/features/savings/types';
 import type { StatusPoster } from '@/features/notifications/status-post';
 import { findCategory, type CategoryCorrector } from '@/features/transactions/correct-category';
 import { normaliseManualDescription, type ManualEntries } from '@/features/transactions/manual-entries';
@@ -49,6 +52,9 @@ export type CommandErrorCode =
   | 'name_taken'
   | 'cannot_merge'
   | 'seed_rule'
+  | 'no_scheduled_change'
+  | 'unknown_savings_account'
+  | 'bad_balance_source'
   | 'bad_date'
   | 'bad_amount'
   | 'bad_split'
@@ -57,6 +63,9 @@ export type CommandErrorCode =
   | 'nothing_to_post'
   | 'post_limit'
   | 'post_failed';
+
+// Which cycle a budget change starts in: the one being reported now, or the next one.
+export type BudgetChangeFrom = 'current' | 'next';
 
 export class CommandError extends Error {
   constructor(
@@ -69,7 +78,7 @@ export class CommandError extends Error {
 }
 
 export interface CommandDeps {
-  budget: Pick<BudgetService, 'summary'>;
+  budget: Pick<BudgetService, 'summary' | 'context'>;
   repo: Pick<
     BudgetRepo,
     | 'findTransaction'
@@ -81,7 +90,9 @@ export interface CommandDeps {
     | 'categoryUsage'
     | 'ensureBudgetItems'
     | 'updateBudgetItem'
+    | 'deleteScheduledBudgetItem'
     | 'listBudgetLines'
+    | 'listBudgetLineVersions'
     | 'listRules'
     | 'deleteRule'
     | 'updateSettings'
@@ -90,6 +101,7 @@ export interface CommandDeps {
     | 'setSuggestion'
   >;
   accounts: Pick<AccountLabelRepo, 'listAccounts' | 'listLabels' | 'countDescriptionMatches' | 'setLabel' | 'removeLabel'>;
+  savings: Pick<SavingsRepo, 'listSavingsAccounts' | 'createSavingsAccount' | 'updateSavingsAccount'>;
   ledger: {
     stores: { transactions: Pick<TransactionStore, 'findMatching' | 'listSplitParts'> };
     corrector: Pick<CategoryCorrector, 'findSimilar' | 'correct' | 'recategorise'>;
@@ -210,7 +222,7 @@ export function createCommands(deps: CommandDeps) {
         isSavings: input.isSavings,
       });
       await deps.repo.ensureBudgetItems(userId);
-      if (input.allocatedCents !== undefined) await deps.repo.updateBudgetItem(userId, id, { allocatedCents: input.allocatedCents });
+      if (input.allocatedCents !== undefined) await deps.repo.updateBudgetItem(userId, id, { allocatedCents: input.allocatedCents }, BUDGET_EPOCH);
       return { id };
     },
 
@@ -246,7 +258,9 @@ export function createCommands(deps: CommandDeps) {
         ...(patch.archived === undefined ? {} : { isArchived: patch.archived }),
         ...(patch.savings === undefined ? {} : { isSavings: patch.savings }),
       });
-      if (patch.archived && target.kind === 'expense') await deps.repo.updateBudgetItem(userId, target.id, { isActive: false });
+      if (patch.archived && target.kind === 'expense') {
+        await deps.repo.updateBudgetItem(userId, target.id, { isActive: false }, (await deps.budget.context(userId)).current.start);
+      }
       const updated: CategoryInfo = {
         ...target,
         name: name ?? target.name,
@@ -274,16 +288,21 @@ export function createCommands(deps: CommandDeps) {
       if (!input.confirm) {
         return { status: 'needs_confirmation' as const, from, into, ...(await deps.repo.categoryUsage(userId, from.id)) };
       }
-      const budgetCents = (await deps.repo.listBudgetLines(userId)).find((l) => l.categoryId === from.id && l.isActive)?.allocatedCents ?? 0;
+      const asOf = (await deps.budget.context(userId)).current.start;
+      const budgetCents = (await deps.repo.listBudgetLines(userId, asOf)).find((l) => l.categoryId === from.id && l.isActive)?.allocatedCents ?? 0;
       const moved = await deps.repo.mergeCategory(userId, from.id, into.id);
       return { status: 'done' as const, from, into, ...moved, droppedBudgetCents: budgetCents };
     },
 
-    // Only what's passed changes.
+    // Only what's passed changes. `from` says which cycle it starts in: 'current' rewrites the
+    // cycle being reported now (what a correction wants), 'next' leaves it alone and applies to
+    // whichever cycle follows, even if salary lands early or late. Cycles already finished keep
+    // the figures they were reported with either way.
     async setBudgetItem(
       userId: string,
       ref: string,
       patch: { allocatedCents?: number; expenseType?: ExpenseType; expectedDay?: number | null; isActive?: boolean },
+      from: BudgetChangeFrom = 'current',
     ) {
       if (Object.values(patch).every((v) => v === undefined)) {
         throw new CommandError('nothing_to_change', 'Nothing to change.');
@@ -293,8 +312,29 @@ export function createCommands(deps: CommandDeps) {
         throw new CommandError('not_expense', `${target.name} is a ${target.kind} category; only expense categories have a budget.`);
       }
       await deps.repo.ensureBudgetItems(userId);
-      await deps.repo.updateBudgetItem(userId, target.id, patch);
-      return (await deps.repo.listBudgetLines(userId)).find((l) => l.categoryId === target.id)!;
+      const { current } = await deps.budget.context(userId);
+      const effectiveFrom = from === 'next' ? addDays(current.start, 1) : current.start;
+      await deps.repo.updateBudgetItem(userId, target.id, patch, effectiveFrom);
+      const line = (await deps.repo.listBudgetLines(userId, effectiveFrom)).find((l) => l.categoryId === target.id)!;
+      return { ...line, effectiveFrom, appliesFrom: from, cycle: current };
+    },
+
+    // Queued budget changes that have not taken effect, soonest first.
+    async listScheduledBudgetChanges(userId: string) {
+      const { current } = await deps.budget.context(userId);
+      return scheduledChanges(await deps.repo.listBudgetLineVersions(userId), current.start);
+    },
+
+    // Drops a queued change. Only a date still in the future: once a change is in force it is part
+    // of what a cycle was reported with, so it is superseded, never removed.
+    async cancelScheduledBudgetChange(userId: string, ref: string, effectiveFrom: string) {
+      const target = await category(userId, ref);
+      const { current } = await deps.budget.context(userId);
+      const dropped = await deps.repo.deleteScheduledBudgetItem(userId, target.id, effectiveFrom, current.start);
+      if (!dropped) {
+        throw new CommandError('no_scheduled_change', `${target.name} has no change queued for ${effectiveFrom}.`);
+      }
+      return { category: target, effectiveFrom };
     },
 
     // Forgets a learned rule. What it already categorised stays as it is; future emails with that
@@ -307,6 +347,83 @@ export function createCommands(deps: CommandDeps) {
       }
       await deps.repo.deleteRule(userId, rule.id);
       return rule;
+    },
+
+    // ── Savings ──────────────────────────────────────────────────────────────────────────────
+    // A savings account is the pot, not the budget: it records what the money is for, where its
+    // balance comes from and what it is being filled to. None of it changes a cycle's totals.
+
+    async addSavingsAccount(
+      userId: string,
+      input: {
+        name: string;
+        purpose?: string | null;
+        category?: string | null;
+        accountMatch?: string | null;
+        balanceSource?: SavingsBalanceSource;
+        goalCents?: number | null;
+        note?: string | null;
+      },
+    ) {
+      const name = input.name.trim();
+      if (name === '') throw new CommandError('nothing_to_change', 'Give the account a name.');
+      const existing = await deps.savings.listSavingsAccounts(userId);
+      if (existing.some((a) => a.name.toLowerCase() === name.toLowerCase())) {
+        throw new CommandError('name_taken', `There is already a savings account called "${name}".`);
+      }
+      const categoryId = input.category ? (await category(userId, input.category, { archived: true })).id : null;
+      const id = await deps.savings.createSavingsAccount(userId, {
+        name,
+        purpose: input.purpose ?? null,
+        categoryId,
+        accountMatch: input.accountMatch ?? null,
+        balanceSource: input.balanceSource ?? (input.accountMatch ? 'bank' : 'contributions'),
+        goalCents: input.goalCents ?? null,
+        note: input.note ?? null,
+        sortOrder: existing.length,
+      });
+      return { id, name };
+    },
+
+    // Only what's passed changes. A balance typed in is kept whatever the source is set to, so
+    // switching back and forth doesn't lose it.
+    async updateSavingsAccount(
+      userId: string,
+      id: string,
+      patch: {
+        name?: string;
+        purpose?: string | null;
+        category?: string | null;
+        accountMatch?: string | null;
+        balanceSource?: SavingsBalanceSource;
+        manualBalanceCents?: number | null;
+        manualBalanceOn?: string | null;
+        goalCents?: number | null;
+        note?: string | null;
+        isActive?: boolean;
+      },
+    ) {
+      const accounts = await deps.savings.listSavingsAccounts(userId);
+      const target = accounts.find((a) => a.id === id);
+      if (!target) throw new CommandError('unknown_savings_account', 'No savings account with that id.');
+      if (patch.balanceSource && !SAVINGS_BALANCE_SOURCES.includes(patch.balanceSource)) {
+        throw new CommandError('bad_balance_source', `A balance comes from one of: ${SAVINGS_BALANCE_SOURCES.join(', ')}.`);
+      }
+      if (patch.name !== undefined) {
+        const name = patch.name.trim();
+        if (name === '') throw new CommandError('nothing_to_change', 'Give the account a name.');
+        if (accounts.some((a) => a.id !== id && a.name.toLowerCase() === name.toLowerCase())) {
+          throw new CommandError('name_taken', `There is already a savings account called "${name}".`);
+        }
+      }
+      const { category: ref, ...rest } = patch;
+      const categoryId = ref === undefined ? undefined : ref ? (await category(userId, ref, { archived: true })).id : null;
+      await deps.savings.updateSavingsAccount(userId, id, {
+        ...rest,
+        ...(patch.name === undefined ? {} : { name: patch.name.trim() }),
+        ...(categoryId === undefined ? {} : { categoryId }),
+      });
+      return (await deps.savings.listSavingsAccounts(userId)).find((a) => a.id === id)!;
     },
 
     async setSalaryConfig(userId: string, patch: Pick<Partial<Settings>, 'salaryDayHint' | 'expectedSalaryCents' | 'salaryTolerancePct'>) {

@@ -31,6 +31,13 @@ export interface BudgetLine {
   isSavings: boolean;
 }
 
+// A budget item as stored: one row per category per effective date. `effectiveFrom` is the first
+// cycle start the figures apply to, so a cycle reads the newest version dated on or before its
+// start and a change scheduled for later sits here until that cycle comes round.
+export interface BudgetLineVersion extends BudgetLine {
+  effectiveFrom: string;
+}
+
 export interface Settings {
   salaryDayHint: number;
   expectedSalaryCents: number | null;
